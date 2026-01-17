@@ -1,0 +1,32 @@
+{
+  "name": "cortex",
+  "version": "2.0.0",
+  "description": "Persistent local memory for Claude Code. Longer sessions, cross-session recall, zero cloud.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.js --external:@xenova/transformers --external:onnxruntime-node --external:sharp --banner:js=\"import { createRequire } from 'module'; import { fileURLToPath } from 'url'; import { dirname } from 'path'; const require = createRequire(import.meta.url); const __filename = fileURLToPath(import.meta.url); const __dirname = dirname(__filename);\" && cp node_modules/sql.js/dist/sql-wasm.wasm dist/",
+    "test": "node --test tests/*.test.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@xenova/transformers": "^2.17.0",
+    "sql.js": "^1.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/sql.js": "^1.4.9",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Tomas Hjertefolger",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hjertefolger/cortex"
+  }
+}

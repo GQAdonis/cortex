@@ -1,0 +1,21 @@
+{
+  "name": "cortex-local",
+  "description": "Local marketplace for Cortex plugin",
+  "owner": {
+    "name": "Tomas Hjertefolger"
+  },
+  "plugins": [
+    {
+      "name": "cortex",
+      "description": "Persistent local memory for Claude Code. Longer sessions, cross-session recall, zero cloud.",
+      "version": "2.0.0",
+      "author": {
+        "name": "Tomas Hjertefolger"
+      },
+      "source": {
+        "source": "directory",
+        "path": ".."
+      }
+    }
+  ]
+}
