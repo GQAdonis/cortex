@@ -3,11 +3,11 @@
   "version": "2.0.0",
   "description": "Persistent local memory for Claude Code. Cross-session recall with vector search, automatic archiving, zero cloud dependencies.",
   "author": {
-    "name": "Tomas Hjertefolger",
-    "url": "https://github.com/stellarwings"
+    "name": "Tomas Krajcik",
+    "url": "https://rootdeveloper.dev"
   },
-  "homepage": "https://github.com/stellarwings/cortex",
-  "repository": "https://github.com/stellarwings/cortex",
+  "homepage": "https://rootdeveloper.dev",
+  "repository": "https://github.com/hjertefolger/cortex",
   "license": "MIT",
   "keywords": [
     "claude-code",
