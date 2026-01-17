@@ -14,8 +14,8 @@
         "name": "Tomas Krajcik"
       },
       "source": {
-        "source": "directory",
-        "path": ".."
+        "type": "github",
+        "repo": "hjertefolger/cortex"
       }
     }
   ]
