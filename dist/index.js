@@ -3556,6 +3556,27 @@ async function handleSetup() {
   const db = await initDb();
   saveDb(db);
   console.log("  \u2713 Database initialized");
+  const { existsSync: existsSync4 } = await import("fs");
+  const pluginDir = new URL(".", import.meta.url).pathname.replace("/dist/", "");
+  const nodeModulesPath = `${pluginDir}/node_modules`;
+  if (!existsSync4(nodeModulesPath)) {
+    console.log("  \u23F3 Installing dependencies (first run only)...");
+    const { execSync } = await import("child_process");
+    try {
+      execSync("npm install", {
+        cwd: pluginDir,
+        stdio: "pipe",
+        timeout: 12e4
+      });
+      console.log("  \u2713 Dependencies installed");
+    } catch (installError) {
+      console.log(`  \u2717 Install failed: ${installError instanceof Error ? installError.message : String(installError)}`);
+      console.log("");
+      console.log("Manual fix:");
+      console.log(`  cd ${pluginDir} && npm install`);
+      return;
+    }
+  }
   console.log("  \u23F3 Loading embedding model (first run may take a minute)...");
   const modelStatus = await verifyModel();
   if (modelStatus.success) {
