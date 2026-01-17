@@ -4,6 +4,7 @@
   "description": "Persistent local memory for Claude Code. Cross-session recall with vector search, automatic archiving, zero cloud dependencies.",
   "author": {
     "name": "Tomas Krajcik",
+    "email": "support@rootdeveloper.dev",
     "url": "https://rootdeveloper.dev"
   },
   "homepage": "https://rootdeveloper.dev",

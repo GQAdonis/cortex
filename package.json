@@ -23,7 +23,11 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "author": "Tomas Krajcik",
+  "author": {
+    "name": "Tomas Krajcik",
+    "email": "support@rootdeveloper.dev",
+    "url": "https://rootdeveloper.dev"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

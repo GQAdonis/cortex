@@ -2,7 +2,8 @@
   "name": "cortex-local",
   "description": "Local marketplace for Cortex plugin",
   "owner": {
-    "name": "Tomas Krajcik"
+    "name": "Tomas Krajcik",
+    "email": "support@rootdeveloper.dev"
   },
   "plugins": [
     {
