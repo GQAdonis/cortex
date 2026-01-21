@@ -9,9 +9,8 @@
 **Persistent local memory for Claude Code.** Longer sessions. Cross-session recall. Zero cloud.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  [Cortex] 47 memories │ my-project │ 45% ctx │ Last: 2m ago    │
-└─────────────────────────────────────────────────────────────────┘
+∿∿ 47 ●●○○○ 45%
+✓ Autosaved ⚠ Run /clear
 ```
 
 ## Why Cortex?
@@ -23,19 +22,74 @@
 | Re-explaining context every session | Hybrid search recalls relevant memories |
 | Cloud memory privacy concerns | 100% local — `~/.cortex/memory.db` |
 
-## Quick Start
+## Install
 
+Inside a Claude Code instance:
+
+**Step 1: Add the marketplace**
+```
+/plugin marketplace add hjertefolger/cortex
+```
+
+**Step 2: Install the plugin**
+
+<details>
+<summary><strong>Linux users: Click here first</strong></summary>
+
+On Linux, `/tmp` is often a separate filesystem (tmpfs), which causes plugin installation to fail with:
+```
+EXDEV: cross-device link not permitted
+```
+
+**Fix**: Set TMPDIR before installing:
 ```bash
-git clone https://github.com/hjertefolger/cortex.git
-cd cortex
-npm install && npm run build
-claude plugin add ./cortex
+mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 ```
 
-Then run the setup wizard:
+Then run the install command below in that session.
+
+</details>
+
 ```
-/cortex:setup
+/plugin install cortex
 ```
+
+**Step 3: Run the setup wizard**
+
+Ask Claude to run the setup skill:
+```
+Please run /cortex-setup
+```
+
+The wizard will initialize the database, download the embedding model, and configure the statusline.
+
+**Step 4: Customize settings**
+
+Ask Claude to configure your preferences:
+```
+Please run /cortex-configure
+```
+
+Done! Restart Claude Code to activate the statusline.
+
+## Statusline
+
+The statusline is configured automatically by `/cortex-setup`. Restart Claude Code after setup to see it.
+
+```
+∿∿ 47 ●●○○○ 45%
+✓ Autosaved ⚠ Run /clear
+```
+
+**Line 1:**
+- `∿∿` — Cortex identifier
+- `47` — Memory fragment count for current project
+- `●●○○○` — Context usage (filled/empty circles, color-coded)
+- `45%` — Context percentage
+
+**Line 2 (conditional):**
+- `✓ Autosaved ⚠ Run /clear` — After auto-save triggers
+- `⚠ Context at 75%. Run /clear` — When warning threshold reached
 
 ## Architecture
 
@@ -120,12 +174,12 @@ Cortex uses a hybrid search combining three signals:
 
 | Command | Purpose |
 |---------|---------|
-| `/cortex:setup` | First-time initialization wizard |
-| `/cortex:save` | Archive current session to memory |
-| `/cortex:recall <query>` | Search memories with hybrid search |
-| `/cortex:stats` | Display memory statistics |
-| `/cortex:configure <preset>` | Apply configuration preset |
-| `/cortex:manage` | Delete or manage memories |
+| `/cortex-setup` | First-time initialization wizard |
+| `/cortex-save` | Archive current session to memory |
+| `/cortex-recall <query>` | Search memories with hybrid search |
+| `/cortex-stats` | Display memory statistics |
+| `/cortex-configure <preset>` | Apply configuration preset |
+| `/cortex-manage` | Delete or manage memories |
 
 ### MCP Tools (Claude-invocable)
 
@@ -188,9 +242,9 @@ cortex_save()
 ### Presets
 
 ```bash
-/cortex:configure full       # All features (statusline, auto-archive, warnings)
-/cortex:configure essential  # Statusline + auto-archive only
-/cortex:configure minimal    # Commands only, no automation
+/cortex-configure full       # All features (statusline, auto-archive, warnings)
+/cortex-configure essential  # Statusline + auto-archive only
+/cortex-configure minimal    # Commands only, no automation
 ```
 
 ### Key Settings
@@ -345,13 +399,13 @@ Cortex implements defensive error handling:
 
 ### Database integrity check
 ```
-/cortex:check-db
+/cortex-manage
 ```
 
 ### Reset to defaults
 ```bash
 rm -rf ~/.cortex
-/cortex:setup
+/cortex-setup
 ```
 
 ### View raw database
