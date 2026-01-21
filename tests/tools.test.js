@@ -261,8 +261,9 @@ function createTestSchema(db) {
 }
 
 function createMockEmbedding() {
-  const embedding = new Float32Array(384);
-  for (let i = 0; i < 384; i++) {
+  // 768 dimensions to match nomic-embed-text-v1.5
+  const embedding = new Float32Array(768);
+  for (let i = 0; i < 768; i++) {
     embedding[i] = Math.random() - 0.5;
   }
   return Buffer.from(embedding.buffer);

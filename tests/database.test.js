@@ -13,19 +13,19 @@ import * as os from 'os';
 const TEST_DATA_DIR = path.join(os.tmpdir(), 'cortex-test-' + Date.now());
 const TEST_DB_PATH = path.join(TEST_DATA_DIR, 'memory.db');
 
-// Mock embeddings (384-dimensional vectors like BGE-small)
+// Mock embeddings (768-dimensional vectors like nomic-embed-text-v1.5)
 function createMockEmbedding(seed = 0) {
-  const embedding = new Float32Array(384);
-  for (let i = 0; i < 384; i++) {
+  const embedding = new Float32Array(768);
+  for (let i = 0; i < 768; i++) {
     embedding[i] = Math.sin(seed + i * 0.1);
   }
   // Normalize
   let norm = 0;
-  for (let i = 0; i < 384; i++) {
+  for (let i = 0; i < 768; i++) {
     norm += embedding[i] * embedding[i];
   }
   norm = Math.sqrt(norm);
-  for (let i = 0; i < 384; i++) {
+  for (let i = 0; i < 768; i++) {
     embedding[i] /= norm;
   }
   return embedding;

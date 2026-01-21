@@ -181,6 +181,12 @@ function markAutoSaved(transcriptPath, contextPercent) {
 function resetAutoSaveState() {
   saveAutoSaveState({ ...DEFAULT_AUTO_SAVE_STATE });
 }
+function markWarningThresholdReached(contextPercent) {
+  const state = loadAutoSaveState();
+  state.hasReachedWarningThreshold = true;
+  state.warningContextPercent = contextPercent;
+  saveAutoSaveState(state);
+}
 var DEFAULT_STATUSLINE_CONFIG, DEFAULT_ARCHIVE_CONFIG, DEFAULT_MONITOR_CONFIG, DEFAULT_AUTOMATION_CONFIG, DEFAULT_SETUP_CONFIG, DEFAULT_CONFIG, CONFIG_PRESETS, DEFAULT_AUTO_SAVE_STATE;
 var init_config = __esm({
   "src/config.ts"() {
@@ -190,7 +196,7 @@ var init_config = __esm({
       showFragments: true,
       showLastArchive: true,
       showContext: true,
-      contextWarningThreshold: 70
+      contextWarningThreshold: 60
     };
     DEFAULT_ARCHIVE_CONFIG = {
       autoOnCompact: true,
@@ -201,11 +207,13 @@ var init_config = __esm({
       tokenThreshold: 70
     };
     DEFAULT_AUTOMATION_CONFIG = {
-      autoSaveThreshold: 70,
+      autoSaveThreshold: 80,
       autoClearThreshold: 80,
       autoClearEnabled: false,
-      restorationTokenBudget: 1e3,
-      restorationMessageCount: 5
+      restorationTokenBudget: 2e3,
+      restorationMessageCount: 5,
+      restorationTurnCount: 3
+      // Last 3 turns (user+assistant pairs) for precise restoration
     };
     DEFAULT_SETUP_CONFIG = {
       completed: false,
@@ -239,8 +247,9 @@ var init_config = __esm({
           autoSaveThreshold: 70,
           autoClearThreshold: 80,
           autoClearEnabled: false,
-          restorationTokenBudget: 1e3,
-          restorationMessageCount: 5
+          restorationTokenBudget: 2e3,
+          restorationMessageCount: 5,
+          restorationTurnCount: 3
         }
       },
       essential: {
@@ -263,8 +272,9 @@ var init_config = __esm({
           autoSaveThreshold: 75,
           autoClearThreshold: 85,
           autoClearEnabled: false,
-          restorationTokenBudget: 800,
-          restorationMessageCount: 5
+          restorationTokenBudget: 1500,
+          restorationMessageCount: 5,
+          restorationTurnCount: 3
         }
       },
       minimal: {
@@ -287,8 +297,9 @@ var init_config = __esm({
           autoSaveThreshold: 85,
           autoClearThreshold: 90,
           autoClearEnabled: false,
-          restorationTokenBudget: 500,
-          restorationMessageCount: 3
+          restorationTokenBudget: 1e3,
+          restorationMessageCount: 3,
+          restorationTurnCount: 2
         }
       }
     };
@@ -296,7 +307,9 @@ var init_config = __esm({
       lastAutoSaveTimestamp: null,
       lastAutoSaveContext: 0,
       transcriptPath: null,
-      hasSavedThisSession: false
+      hasSavedThisSession: false,
+      hasReachedWarningThreshold: false,
+      warningContextPercent: 0
     };
   }
 });
@@ -2629,6 +2642,8 @@ var require_sql_wasm = __commonJS({
 // src/database.ts
 var database_exports = {};
 __export(database_exports, {
+  clearOldTurns: () => clearOldTurns,
+  clearProjectTurns: () => clearProjectTurns,
   closeDb: () => closeDb,
   contentExists: () => contentExists,
   deleteMemory: () => deleteMemory,
@@ -2637,16 +2652,20 @@ __export(database_exports, {
   getMemory: () => getMemory,
   getProjectStats: () => getProjectStats,
   getRecentMemories: () => getRecentMemories,
+  getRecentSummaries: () => getRecentSummaries,
+  getRecentTurns: () => getRecentTurns,
   getStats: () => getStats,
   hashContent: () => hashContent,
   initDb: () => initDb,
   insertMemory: () => insertMemory,
+  insertTurn: () => insertTurn,
   isFts5Enabled: () => isFts5Enabled,
   saveDb: () => saveDb,
   searchByKeyword: () => searchByKeyword,
   searchByVector: () => searchByVector,
   storeManualMemory: () => storeManualMemory,
-  updateMemory: () => updateMemory
+  updateMemory: () => updateMemory,
+  upsertSessionSummary: () => upsertSessionSummary
 });
 import * as fs2 from "fs";
 import * as crypto2 from "crypto";
@@ -2699,6 +2718,38 @@ function createSchema(db) {
   db.run(`CREATE INDEX IF NOT EXISTS idx_memories_project_id ON memories(project_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)`);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS session_turns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      project_id TEXT,
+      session_id TEXT NOT NULL,
+      turn_index INTEGER NOT NULL,
+      timestamp TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_turns_project ON session_turns(project_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_turns_session ON session_turns(session_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON session_turns(timestamp DESC)`);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS session_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id TEXT,
+      session_id TEXT NOT NULL UNIQUE,
+      summary TEXT NOT NULL,
+      key_decisions TEXT,
+      key_outcomes TEXT,
+      blockers TEXT,
+      context_at_save INTEGER,
+      fragments_saved INTEGER,
+      timestamp TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_summaries_project ON session_summaries(project_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_summaries_timestamp ON session_summaries(timestamp DESC)`);
   fts5Available = checkFts5(db);
   if (fts5Available) {
     try {
@@ -3015,6 +3066,105 @@ function getProjectStats(db, projectId) {
     lastArchive
   };
 }
+function insertTurn(db, turn) {
+  db.run(
+    `INSERT INTO session_turns (role, content, project_id, session_id, turn_index, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [turn.role, turn.content, turn.projectId, turn.sessionId, turn.turnIndex, turn.timestamp.toISOString()]
+  );
+  const result = db.exec(`SELECT last_insert_rowid()`);
+  return result[0].values[0][0];
+}
+function getRecentTurns(db, projectId, limit = 6) {
+  let query = `
+    SELECT id, role, content, project_id, session_id, turn_index, timestamp
+    FROM session_turns
+  `;
+  const params = [];
+  if (projectId !== null) {
+    query += ` WHERE project_id = ?`;
+    params.push(projectId);
+  }
+  query += ` ORDER BY timestamp DESC, turn_index DESC LIMIT ?`;
+  params.push(limit);
+  const result = db.exec(query, params);
+  if (result.length === 0 || result[0].values.length === 0) {
+    return [];
+  }
+  return result[0].values.map((row) => ({
+    id: row[0],
+    role: row[1],
+    content: row[2],
+    projectId: row[3],
+    sessionId: row[4],
+    turnIndex: row[5],
+    timestamp: new Date(row[6])
+  })).reverse();
+}
+function clearOldTurns(db, keepCount = 10) {
+  db.run(`
+    DELETE FROM session_turns
+    WHERE id NOT IN (
+      SELECT id FROM session_turns
+      ORDER BY timestamp DESC, turn_index DESC
+      LIMIT ?
+    )
+  `, [keepCount]);
+  return db.getRowsModified();
+}
+function clearProjectTurns(db, projectId) {
+  if (projectId === null) {
+    db.run(`DELETE FROM session_turns WHERE project_id IS NULL`);
+  } else {
+    db.run(`DELETE FROM session_turns WHERE project_id = ?`, [projectId]);
+  }
+  return db.getRowsModified();
+}
+function upsertSessionSummary(db, input) {
+  db.run(
+    `INSERT OR REPLACE INTO session_summaries
+     (project_id, session_id, summary, key_decisions, key_outcomes, blockers, context_at_save, fragments_saved, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      input.projectId,
+      input.sessionId,
+      input.summary,
+      input.keyDecisions?.join("\n") || null,
+      input.keyOutcomes?.join("\n") || null,
+      input.blockers?.join("\n") || null,
+      input.contextAtSave || null,
+      input.fragmentsSaved || null,
+      input.timestamp.toISOString()
+    ]
+  );
+  const result = db.exec(`SELECT last_insert_rowid()`);
+  return result[0].values[0][0];
+}
+function getRecentSummaries(db, projectId, limit = 5) {
+  let query = `
+    SELECT id, session_id, summary, key_decisions, key_outcomes, timestamp
+    FROM session_summaries
+  `;
+  const params = [];
+  if (projectId !== null) {
+    query += ` WHERE project_id = ?`;
+    params.push(projectId);
+  }
+  query += ` ORDER BY timestamp DESC LIMIT ?`;
+  params.push(limit);
+  const result = db.exec(query, params);
+  if (result.length === 0 || result[0].values.length === 0) {
+    return [];
+  }
+  return result[0].values.map((row) => ({
+    id: row[0],
+    sessionId: row[1],
+    summary: row[2],
+    keyDecisions: row[3]?.split("\n").filter(Boolean) || [],
+    keyOutcomes: row[4]?.split("\n").filter(Boolean) || [],
+    timestamp: new Date(row[5])
+  }));
+}
 function cosineSimilarity(a, b) {
   if (a.length !== b.length) {
     return 0;
@@ -3182,10 +3332,10 @@ var MODEL_NAME, EMBEDDING_DIM, PASSAGE_PREFIX, QUERY_PREFIX, embedder, initPromi
 var init_embeddings = __esm({
   "src/embeddings.ts"() {
     "use strict";
-    MODEL_NAME = "Xenova/bge-small-en-v1.5";
-    EMBEDDING_DIM = 384;
-    PASSAGE_PREFIX = "passage: ";
-    QUERY_PREFIX = "query: ";
+    MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5";
+    EMBEDDING_DIM = 768;
+    PASSAGE_PREFIX = "search_document: ";
+    QUERY_PREFIX = "search_query: ";
     embedder = null;
     initPromise = null;
     pipelineFunc = null;
@@ -3396,7 +3546,9 @@ init_embeddings();
 init_config();
 import * as fs3 from "fs";
 import * as readline from "readline";
-var MIN_CONTENT_LENGTH = 50;
+var MIN_CONTENT_LENGTH = 150;
+var OPTIMAL_CHUNK_SIZE = 400;
+var MAX_CHUNK_SIZE = 600;
 var EXCLUDED_PATTERNS = [
   /^(ok|okay|done|yes|no|sure|thanks|thank you|got it|understood|alright)\.?$/i,
   /^(hello|hi|hey|bye|goodbye)\.?$/i,
@@ -3404,8 +3556,31 @@ var EXCLUDED_PATTERNS = [
   /^n(o)?$/i,
   /^\d+$/,
   // Just numbers
-  /^[.!?]+$/
+  /^[.!?]+$/,
   // Just punctuation
+  /^```[\s\S]*```$/,
+  // Pure code blocks without explanation
+  /^\[Cortex\]/,
+  // Our own status messages
+  /^Running:/i
+  // Tool execution outputs
+];
+var HIGH_VALUE_PATTERNS = [
+  // Decisions and rationale
+  /decided to|chose to|went with|opted for/i,
+  /because|since|therefore|the reason/i,
+  /trade-?off|pros? and cons?|alternative/i,
+  // Architecture and design
+  /architect|design|pattern|approach|strategy/i,
+  /structure|schema|interface|contract/i,
+  // Key outcomes
+  /implemented|completed|fixed|resolved|solved/i,
+  /created|added|updated|modified|refactored/i,
+  /the solution|the fix|the approach/i,
+  // Important context
+  /important|critical|note that|keep in mind/i,
+  /caveat|limitation|constraint|requirement/i,
+  /blocker|issue|problem|error|bug/i
 ];
 var VALUABLE_PATTERNS = [
   /function\s+\w+/i,
@@ -3416,9 +3591,9 @@ var VALUABLE_PATTERNS = [
   /const\s+\w+\s*=/,
   /let\s+\w+\s*=/,
   /def\s+\w+/,
-  /error|bug|fix|issue|problem/i,
-  /implemented?|created?|added?|updated?|modified?|removed?/i,
-  /because|since|therefore|however|although/i
+  /however|although|while|whereas/i,
+  /should|must|need to|have to/i,
+  /config|setting|option|parameter/i
 ];
 async function parseTranscript(transcriptPath) {
   if (!fs3.existsSync(transcriptPath)) {
@@ -3491,16 +3666,24 @@ function shouldExclude(content) {
   }
   return false;
 }
-function isValuable(content) {
+function getContentValue(content) {
+  for (const pattern of HIGH_VALUE_PATTERNS) {
+    if (pattern.test(content)) {
+      return 2;
+    }
+  }
   for (const pattern of VALUABLE_PATTERNS) {
     if (pattern.test(content)) {
-      return true;
+      return 1;
     }
   }
   const words = content.split(/\s+/).length;
-  return words >= 10;
+  if (words >= 15) {
+    return 1;
+  }
+  return 0;
 }
-function extractChunks(content) {
+function extractChunks(content, role = "assistant") {
   const chunks = [];
   const paragraphs = content.split(/\n\n+/);
   for (const para of paragraphs) {
@@ -3508,27 +3691,143 @@ function extractChunks(content) {
     if (trimmed.length < MIN_CONTENT_LENGTH) {
       continue;
     }
-    if (trimmed.length > 1e3) {
-      const sentences = trimmed.split(/(?<=[.!?])\s+/);
-      let currentChunk = "";
-      for (const sentence of sentences) {
-        if (currentChunk.length + sentence.length > 800) {
-          if (currentChunk.length >= MIN_CONTENT_LENGTH) {
-            chunks.push(currentChunk.trim());
-          }
-          currentChunk = sentence;
-        } else {
-          currentChunk += (currentChunk ? " " : "") + sentence;
-        }
-      }
-      if (currentChunk.length >= MIN_CONTENT_LENGTH) {
-        chunks.push(currentChunk.trim());
-      }
-    } else {
+    if (trimmed.length <= MAX_CHUNK_SIZE) {
       chunks.push(trimmed);
+      continue;
+    }
+    const sentences = trimmed.split(/(?<=[.!?])\s+/);
+    let currentChunk = "";
+    for (const sentence of sentences) {
+      const potentialLength = currentChunk.length + (currentChunk ? 1 : 0) + sentence.length;
+      if (potentialLength > MAX_CHUNK_SIZE && currentChunk.length >= MIN_CONTENT_LENGTH) {
+        chunks.push(currentChunk.trim());
+        currentChunk = sentence;
+      } else if (currentChunk.length >= OPTIMAL_CHUNK_SIZE && sentence.length > 100) {
+        chunks.push(currentChunk.trim());
+        currentChunk = sentence;
+      } else {
+        currentChunk += (currentChunk ? " " : "") + sentence;
+      }
+    }
+    if (currentChunk.length >= MIN_CONTENT_LENGTH) {
+      chunks.push(currentChunk.trim());
     }
   }
+  if (role === "user" && chunks.length > 0) {
+    return chunks.map((chunk) => `[User request] ${chunk}`);
+  }
   return chunks;
+}
+var DECISION_PATTERNS = [
+  /(?:decided|chose|went with|opted for|selected|picked|using)\s+(.{20,150})/gi,
+  /(?:the approach|the solution|the fix)\s+(?:is|was|will be)\s+(.{20,150})/gi,
+  /(?:we(?:'ll| will)|I(?:'ll| will))\s+(?:use|implement|go with)\s+(.{20,100})/gi
+];
+var OUTCOME_PATTERNS = [
+  /(?:implemented|completed|fixed|resolved|added|created|built)\s+(.{20,150})/gi,
+  /(?:now works|is working|successfully)\s+(.{10,100})/gi,
+  /(?:the (?:feature|bug|issue|problem))\s+(?:has been|was)\s+(.{20,100})/gi
+];
+var BLOCKER_PATTERNS = [
+  /(?:blocked by|stuck on|can't|cannot|unable to)\s+(.{20,150})/gi,
+  /(?:error|issue|problem|bug)(?::|was|is)\s+(.{20,150})/gi,
+  /(?:need to|have to|must)\s+(?:first|before)\s+(.{20,100})/gi
+];
+function extractSessionInsights(messages) {
+  const decisions = [];
+  const outcomes = [];
+  const blockers = [];
+  const topics = /* @__PURE__ */ new Set();
+  for (const msg of messages) {
+    const content = msg.content;
+    for (const pattern of DECISION_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        const extracted = match[1]?.trim();
+        if (extracted && extracted.length > 20 && !decisions.includes(extracted)) {
+          decisions.push(extracted.substring(0, 150));
+          if (decisions.length >= 5)
+            break;
+        }
+      }
+    }
+    for (const pattern of OUTCOME_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        const extracted = match[1]?.trim();
+        if (extracted && extracted.length > 15 && !outcomes.includes(extracted)) {
+          outcomes.push(extracted.substring(0, 150));
+          if (outcomes.length >= 5)
+            break;
+        }
+      }
+    }
+    for (const pattern of BLOCKER_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        const extracted = match[1]?.trim();
+        if (extracted && extracted.length > 15 && !blockers.includes(extracted)) {
+          blockers.push(extracted.substring(0, 150));
+          if (blockers.length >= 3)
+            break;
+        }
+      }
+    }
+    if (msg.role === "user" && msg.content.length > 30) {
+      const firstSentence = content.split(/[.!?]/)[0]?.trim();
+      if (firstSentence && firstSentence.length > 10) {
+        topics.add(firstSentence.substring(0, 80));
+      }
+    }
+  }
+  let summary = "";
+  const topicList = Array.from(topics).slice(0, 3);
+  if (topicList.length > 0) {
+    summary = `Session topics: ${topicList.join("; ")}`;
+  }
+  if (outcomes.length > 0) {
+    summary += summary ? ". " : "";
+    summary += `Completed: ${outcomes.slice(0, 2).join(", ")}`;
+  }
+  if (decisions.length > 0) {
+    summary += summary ? ". " : "";
+    summary += `Key decisions: ${decisions.length}`;
+  }
+  if (!summary) {
+    summary = `Session with ${messages.length} messages`;
+  }
+  return {
+    decisions: decisions.slice(0, 5),
+    outcomes: outcomes.slice(0, 5),
+    blockers: blockers.slice(0, 3),
+    summary: summary.substring(0, 500)
+  };
+}
+async function saveSessionTurns(db, transcriptPath, projectId, maxTurns = 6) {
+  const messages = await parseTranscript(transcriptPath);
+  const sessionId = getSessionId(transcriptPath);
+  const relevantMessages = messages.filter((m) => m.role === "user" || m.role === "assistant").slice(-maxTurns);
+  if (relevantMessages.length === 0) {
+    return 0;
+  }
+  clearProjectTurns(db, projectId);
+  let savedCount = 0;
+  for (let i = 0; i < relevantMessages.length; i++) {
+    const msg = relevantMessages[i];
+    insertTurn(db, {
+      role: msg.role,
+      content: msg.content,
+      projectId,
+      sessionId,
+      turnIndex: i,
+      timestamp: msg.timestamp ? new Date(msg.timestamp) : /* @__PURE__ */ new Date()
+    });
+    savedCount++;
+  }
+  return savedCount;
 }
 async function archiveSession(db, transcriptPath, projectId, options = {}) {
   const config = loadConfig();
@@ -3544,10 +3843,14 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
   }
   const contentToArchive = [];
   for (const message of messages) {
-    if (message.role !== "assistant") {
+    const role = message.role;
+    if (role !== "user" && role !== "assistant") {
       continue;
     }
-    const chunks = extractChunks(message.content);
+    if (role === "user" && message.content.length < 200) {
+      continue;
+    }
+    const chunks = extractChunks(message.content, role);
     for (const chunk of chunks) {
       if (chunk.length < minLength) {
         result.skipped++;
@@ -3557,7 +3860,8 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
         result.skipped++;
         continue;
       }
-      if (!isValuable(chunk)) {
+      const value = getContentValue(chunk);
+      if (value === 0) {
         result.skipped++;
         continue;
       }
@@ -3567,10 +3871,12 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
       }
       contentToArchive.push({
         content: chunk,
-        timestamp: message.timestamp ? new Date(message.timestamp) : /* @__PURE__ */ new Date()
+        timestamp: message.timestamp ? new Date(message.timestamp) : /* @__PURE__ */ new Date(),
+        value
       });
     }
   }
+  contentToArchive.sort((a, b) => b.value - a.value);
   if (contentToArchive.length === 0) {
     return result;
   }
@@ -3595,6 +3901,21 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
       result.archived++;
     }
   }
+  const turnCount = config.automation.restorationTurnCount * 2;
+  await saveSessionTurns(db, transcriptPath, projectId, turnCount);
+  const insights = extractSessionInsights(messages);
+  if (insights.summary || insights.decisions.length > 0 || insights.outcomes.length > 0) {
+    upsertSessionSummary(db, {
+      projectId,
+      sessionId,
+      summary: insights.summary,
+      keyDecisions: insights.decisions,
+      keyOutcomes: insights.outcomes,
+      blockers: insights.blockers,
+      fragmentsSaved: result.archived,
+      timestamp: /* @__PURE__ */ new Date()
+    });
+  }
   saveDb(db);
   return result;
 }
@@ -3612,48 +3933,72 @@ function formatArchiveResult(result) {
   return lines.join("\n");
 }
 async function buildRestorationContext(db, projectId, options = {}) {
-  const { messageCount = 5, tokenBudget = 1e3 } = options;
-  const { searchByVector: searchByVector3 } = await Promise.resolve().then(() => (init_database(), database_exports));
-  const { embedQuery: embedQuery3 } = await Promise.resolve().then(() => (init_embeddings(), embeddings_exports));
-  const queryEmbedding = await embedQuery3("recent work summary context decisions");
-  const results = searchByVector3(db, queryEmbedding, projectId, messageCount * 2);
-  if (results.length === 0) {
-    return {
-      hasContent: false,
-      summary: "No recent context available.",
-      fragments: [],
-      estimatedTokens: 0
-    };
-  }
-  const fragments = [];
-  let totalTokens = 0;
+  const config = loadConfig();
+  const {
+    messageCount = 5,
+    tokenBudget = config.automation.restorationTokenBudget,
+    turnCount = config.automation.restorationTurnCount * 2
+    // * 2 for user+assistant pairs
+  } = options;
   const tokensPerChar = 0.25;
-  for (const result of results) {
-    const contentTokens = Math.ceil(result.content.length * tokensPerChar);
-    if (totalTokens + contentTokens > tokenBudget) {
-      const remainingTokens = tokenBudget - totalTokens;
-      if (remainingTokens > 50) {
-        const truncatedLength = Math.floor(remainingTokens / tokensPerChar);
-        fragments.push({
-          content: result.content.substring(0, truncatedLength) + "...",
-          timestamp: result.timestamp
-        });
-      }
+  let totalTokens = 0;
+  const rawTurns = getRecentTurns(db, projectId, turnCount);
+  const includedTurns = [];
+  const turnsBudget = Math.floor(tokenBudget * 0.7);
+  let turnsTokens = 0;
+  for (const turn of rawTurns) {
+    const truncatedContent = turn.content.length > 600 ? turn.content.substring(0, 600) + "..." : turn.content;
+    const turnTokens = Math.ceil(truncatedContent.length * tokensPerChar);
+    if (turnsTokens + turnTokens > turnsBudget) {
       break;
     }
-    fragments.push({
-      content: result.content,
-      timestamp: result.timestamp
+    includedTurns.push({
+      role: turn.role,
+      content: truncatedContent,
+      timestamp: turn.timestamp
     });
-    totalTokens += contentTokens;
-    if (fragments.length >= messageCount) {
-      break;
+    turnsTokens += turnTokens;
+  }
+  totalTokens += turnsTokens;
+  const fragmentsBudget = tokenBudget - totalTokens;
+  const fragments = [];
+  if (fragmentsBudget > 100) {
+    const { searchByVector: searchByVector3 } = await Promise.resolve().then(() => (init_database(), database_exports));
+    const { embedQuery: embedQuery3 } = await Promise.resolve().then(() => (init_embeddings(), embeddings_exports));
+    const queryEmbedding = await embedQuery3("recent work summary context decisions");
+    const results = searchByVector3(db, queryEmbedding, projectId, messageCount * 2);
+    for (const result of results) {
+      const truncatedContent = result.content.length > 300 ? result.content.substring(0, 300) + "..." : result.content;
+      const contentTokens = Math.ceil(truncatedContent.length * tokensPerChar);
+      if (totalTokens + contentTokens > tokenBudget) {
+        break;
+      }
+      fragments.push({
+        content: truncatedContent,
+        timestamp: result.timestamp
+      });
+      totalTokens += contentTokens;
+      if (fragments.length >= messageCount) {
+        break;
+      }
     }
   }
-  const summary = fragments.length > 0 ? `Restored ${fragments.length} context fragments from ${projectId || "global"} memory.` : "No relevant context found.";
+  const hasContent = includedTurns.length > 0 || fragments.length > 0;
+  let summary = "No recent context available.";
+  if (hasContent) {
+    const parts = [];
+    if (includedTurns.length > 0) {
+      parts.push(`${includedTurns.length} turns`);
+    }
+    if (fragments.length > 0) {
+      parts.push(`${fragments.length} memories`);
+    }
+    summary = `Restored ${parts.join(" and ")} from ${projectId || "global"}.`;
+  }
   return {
-    hasContent: fragments.length > 0,
+    hasContent,
     summary,
+    turns: includedTurns,
     fragments,
     estimatedTokens: totalTokens
   };
@@ -3665,12 +4010,25 @@ function formatRestorationContext(context) {
   const lines = [];
   lines.push(context.summary);
   lines.push("");
-  for (let i = 0; i < context.fragments.length; i++) {
-    const fragment = context.fragments[i];
-    const timeAgo = formatTimeAgo2(fragment.timestamp);
-    lines.push(`[${i + 1}] (${timeAgo})`);
-    lines.push(fragment.content);
-    lines.push("");
+  if (context.turns.length > 0) {
+    lines.push("--- Recent Conversation ---");
+    for (const turn of context.turns) {
+      const timeAgo = formatTimeAgo2(turn.timestamp);
+      const roleLabel = turn.role === "user" ? "User" : "Assistant";
+      lines.push(`[${roleLabel}] (${timeAgo})`);
+      lines.push(turn.content);
+      lines.push("");
+    }
+  }
+  if (context.fragments.length > 0) {
+    lines.push("--- Related Memories ---");
+    for (let i = 0; i < context.fragments.length; i++) {
+      const fragment = context.fragments[i];
+      const timeAgo = formatTimeAgo2(fragment.timestamp);
+      lines.push(`[${i + 1}] (${timeAgo})`);
+      lines.push(fragment.content);
+      lines.push("");
+    }
   }
   lines.push(`~${context.estimatedTokens} tokens`);
   return lines.join("\n");
@@ -3807,7 +4165,7 @@ var ANSI = {
   reset: "\x1B[0m",
   bold: "\x1B[1m",
   dim: "\x1B[2m",
-  green: "\x1B[32m",
+  green: "\x1B[38;2;72;150;140m",
   yellow: "\x1B[33m",
   red: "\x1B[31m",
   cyan: "\x1B[36m",
@@ -3886,16 +4244,27 @@ async function handleStatusline() {
   }
   if (config.statusline.enabled) {
     const stats = getStats(db);
-    const sep = `${ANSI.darkGray} \xB7 ${ANSI.reset}`;
-    const parts = [`${ANSI.brick}Cortex${ANSI.reset}`];
+    const parts = [`${ANSI.brick}\u223F\u223F${ANSI.reset}`];
     if (config.statusline.showFragments) {
-      parts.push(`${stats.fragmentCount} frags`);
+      parts.push(`${stats.fragmentCount}`);
     }
     if (config.statusline.showContext) {
       const contextStrip = createContextStrip(contextPercent);
       parts.push(contextStrip);
     }
-    console.log(parts.join(sep));
+    console.log(parts.join(" "));
+    const autoSaveState = loadAutoSaveState();
+    const warningThreshold = config.statusline.contextWarningThreshold;
+    if (autoSaveState.hasSavedThisSession) {
+      console.log(`${ANSI.green}\u2713 Autosaved${ANSI.reset} ${ANSI.yellow}\u26A0 Run /clear${ANSI.reset}`);
+    } else if (warningThreshold > 0 && contextPercent >= warningThreshold) {
+      if (!autoSaveState.hasReachedWarningThreshold) {
+        markWarningThresholdReached(contextPercent);
+      }
+      console.log(`${ANSI.yellow}\u26A0 Context at ${contextPercent}%. Run /clear${ANSI.reset}`);
+    } else if (autoSaveState.hasReachedWarningThreshold && !autoSaveState.hasSavedThisSession) {
+      console.log(`${ANSI.yellow}\u26A0 Context at ${autoSaveState.warningContextPercent}%. Run /clear${ANSI.reset}`);
+    }
   }
   if (contextPercent > 0 && config.automation.autoClearEnabled) {
     const transcriptPath = stdin?.transcript_path || null;
@@ -3915,7 +4284,7 @@ async function handleStatusline() {
   }
 }
 function createContextStrip(percent) {
-  const totalCircles = 10;
+  const totalCircles = 5;
   const filled = Math.round(percent / 100 * totalCircles);
   const empty = totalCircles - filled;
   let color;
@@ -4052,6 +4421,7 @@ async function handleSmartCompact() {
 async function handlePreCompact() {
   const stdin = await readStdin();
   const config = loadConfig();
+  resetAutoSaveState();
   if (!config.archive.autoOnCompact) {
     return;
   }

@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import initSqlJs, { Database as SqlJsDatabase, SqlValue } from 'sql.js';
 import { getDatabasePath, ensureDataDir } from './config.js';
-import type { Memory, MemoryInput, DbStats } from './types.js';
+import type { Memory, MemoryInput, DbStats, SessionTurn, TurnInput } from './types.js';
 import * as crypto from 'crypto';
 
 // ============================================================================
@@ -88,6 +88,44 @@ function createSchema(db: SqlJsDatabase): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_memories_project_id ON memories(project_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)`);
+
+  // Session turns table (for precise restoration after /clear)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS session_turns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      project_id TEXT,
+      session_id TEXT NOT NULL,
+      turn_index INTEGER NOT NULL,
+      timestamp TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_turns_project ON session_turns(project_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_turns_session ON session_turns(session_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON session_turns(timestamp DESC)`);
+
+  // Session summaries table (captures session-level context without full transcript)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS session_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id TEXT,
+      session_id TEXT NOT NULL UNIQUE,
+      summary TEXT NOT NULL,
+      key_decisions TEXT,
+      key_outcomes TEXT,
+      blockers TEXT,
+      context_at_save INTEGER,
+      fragments_saved INTEGER,
+      timestamp TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_summaries_project ON session_summaries(project_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_summaries_timestamp ON session_summaries(timestamp DESC)`);
 
   // Try to create FTS5 virtual table (may not be available in all sql.js builds)
   fts5Available = checkFts5(db);
@@ -608,6 +646,174 @@ export function getProjectStats(db: SqlJsDatabase, projectId: string): {
     sessionCount,
     lastArchive,
   };
+}
+
+// ============================================================================
+// Session Turn Operations (for precise restoration)
+// ============================================================================
+
+/**
+ * Insert a session turn
+ */
+export function insertTurn(db: SqlJsDatabase, turn: TurnInput): number {
+  db.run(
+    `INSERT INTO session_turns (role, content, project_id, session_id, turn_index, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [turn.role, turn.content, turn.projectId, turn.sessionId, turn.turnIndex, turn.timestamp.toISOString()]
+  );
+  const result = db.exec(`SELECT last_insert_rowid()`);
+  return result[0].values[0][0] as number;
+}
+
+/**
+ * Get recent turns for a project, ordered chronologically
+ */
+export function getRecentTurns(
+  db: SqlJsDatabase,
+  projectId: string | null,
+  limit: number = 6
+): SessionTurn[] {
+  let query = `
+    SELECT id, role, content, project_id, session_id, turn_index, timestamp
+    FROM session_turns
+  `;
+  const params: (string | number)[] = [];
+
+  if (projectId !== null) {
+    query += ` WHERE project_id = ?`;
+    params.push(projectId);
+  }
+
+  query += ` ORDER BY timestamp DESC, turn_index DESC LIMIT ?`;
+  params.push(limit);
+
+  const result = db.exec(query, params);
+  if (result.length === 0 || result[0].values.length === 0) {
+    return [];
+  }
+
+  // Reverse to chronological order
+  return result[0].values.map((row: SqlValue[]) => ({
+    id: row[0] as number,
+    role: row[1] as 'user' | 'assistant',
+    content: row[2] as string,
+    projectId: row[3] as string | null,
+    sessionId: row[4] as string,
+    turnIndex: row[5] as number,
+    timestamp: new Date(row[6] as string),
+  })).reverse();
+}
+
+/**
+ * Clear old turns, keeping only the most recent N per project
+ */
+export function clearOldTurns(db: SqlJsDatabase, keepCount: number = 10): number {
+  // Delete turns older than the most recent keepCount
+  db.run(`
+    DELETE FROM session_turns
+    WHERE id NOT IN (
+      SELECT id FROM session_turns
+      ORDER BY timestamp DESC, turn_index DESC
+      LIMIT ?
+    )
+  `, [keepCount]);
+  return db.getRowsModified();
+}
+
+/**
+ * Clear all turns for a project (called before saving new turns)
+ */
+export function clearProjectTurns(db: SqlJsDatabase, projectId: string | null): number {
+  if (projectId === null) {
+    db.run(`DELETE FROM session_turns WHERE project_id IS NULL`);
+  } else {
+    db.run(`DELETE FROM session_turns WHERE project_id = ?`, [projectId]);
+  }
+  return db.getRowsModified();
+}
+
+// ============================================================================
+// Session Summary Operations
+// ============================================================================
+
+export interface SessionSummaryInput {
+  projectId: string | null;
+  sessionId: string;
+  summary: string;
+  keyDecisions?: string[];
+  keyOutcomes?: string[];
+  blockers?: string[];
+  contextAtSave?: number;
+  fragmentsSaved?: number;
+  timestamp: Date;
+}
+
+/**
+ * Insert or update a session summary
+ */
+export function upsertSessionSummary(db: SqlJsDatabase, input: SessionSummaryInput): number {
+  db.run(
+    `INSERT OR REPLACE INTO session_summaries
+     (project_id, session_id, summary, key_decisions, key_outcomes, blockers, context_at_save, fragments_saved, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      input.projectId,
+      input.sessionId,
+      input.summary,
+      input.keyDecisions?.join('\n') || null,
+      input.keyOutcomes?.join('\n') || null,
+      input.blockers?.join('\n') || null,
+      input.contextAtSave || null,
+      input.fragmentsSaved || null,
+      input.timestamp.toISOString(),
+    ]
+  );
+  const result = db.exec(`SELECT last_insert_rowid()`);
+  return result[0].values[0][0] as number;
+}
+
+/**
+ * Get recent session summaries for a project
+ */
+export function getRecentSummaries(
+  db: SqlJsDatabase,
+  projectId: string | null,
+  limit: number = 5
+): Array<{
+  id: number;
+  sessionId: string;
+  summary: string;
+  keyDecisions: string[];
+  keyOutcomes: string[];
+  timestamp: Date;
+}> {
+  let query = `
+    SELECT id, session_id, summary, key_decisions, key_outcomes, timestamp
+    FROM session_summaries
+  `;
+  const params: (string | number)[] = [];
+
+  if (projectId !== null) {
+    query += ` WHERE project_id = ?`;
+    params.push(projectId);
+  }
+
+  query += ` ORDER BY timestamp DESC LIMIT ?`;
+  params.push(limit);
+
+  const result = db.exec(query, params);
+  if (result.length === 0 || result[0].values.length === 0) {
+    return [];
+  }
+
+  return result[0].values.map((row: SqlValue[]) => ({
+    id: row[0] as number,
+    sessionId: row[1] as string,
+    summary: row[2] as string,
+    keyDecisions: (row[3] as string | null)?.split('\n').filter(Boolean) || [],
+    keyOutcomes: (row[4] as string | null)?.split('\n').filter(Boolean) || [],
+    timestamp: new Date(row[5] as string),
+  }));
 }
 
 // ============================================================================

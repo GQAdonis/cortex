@@ -4,7 +4,7 @@
  */
 
 import { readStdin, getProjectId, getContextPercent, formatDuration } from './stdin.js';
-import { loadConfig, ensureDataDir, applyPreset, getDataDir, isSetupComplete, markSetupComplete, saveCurrentSession, shouldAutoSave, markAutoSaved, resetAutoSaveState, loadAutoSaveState, type ConfigPreset } from './config.js';
+import { loadConfig, ensureDataDir, applyPreset, getDataDir, isSetupComplete, markSetupComplete, saveCurrentSession, shouldAutoSave, markAutoSaved, resetAutoSaveState, loadAutoSaveState, markWarningThresholdReached, type ConfigPreset } from './config.js';
 import { initDb, getStats, getProjectStats, formatBytes, closeDb, saveDb, searchByVector } from './database.js';
 import { verifyModel, getModelName, embedQuery } from './embeddings.js';
 import { hybridSearch, formatSearchResults } from './search.js';
@@ -20,7 +20,7 @@ const ANSI = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
   dim: '\x1b[2m',
-  green: '\x1b[32m',
+  green: '\x1b[38;2;72;150;140m',
   yellow: '\x1b[33m',
   red: '\x1b[31m',
   cyan: '\x1b[36m',
@@ -129,12 +129,11 @@ async function handleStatusline() {
   // === Statusline display (only if enabled) ===
   if (config.statusline.enabled) {
     const stats = getStats(db);
-    const sep = `${ANSI.darkGray} · ${ANSI.reset}`;
-    const parts: string[] = [`${ANSI.brick}Cortex${ANSI.reset}`];
+    const parts: string[] = [`${ANSI.brick}∿∿${ANSI.reset}`];
 
-    // Fragment count
+    // Memory count
     if (config.statusline.showFragments) {
-      parts.push(`${stats.fragmentCount} frags`);
+      parts.push(`${stats.fragmentCount}`);
     }
 
     // Context usage with circle strip
@@ -143,8 +142,26 @@ async function handleStatusline() {
       parts.push(contextStrip);
     }
 
-    // Output statusline
-    console.log(parts.join(sep));
+    // Output main statusline (no separators)
+    console.log(parts.join(' '));
+
+    // Line 2: Persistent indicators (shows until /clear)
+    const autoSaveState = loadAutoSaveState();
+    const warningThreshold = config.statusline.contextWarningThreshold;
+
+    if (autoSaveState.hasSavedThisSession) {
+      // Autosave message takes priority
+      console.log(`${ANSI.green}✓ Autosaved${ANSI.reset} ${ANSI.yellow}⚠ Run /clear${ANSI.reset}`);
+    } else if (warningThreshold > 0 && contextPercent >= warningThreshold) {
+      // Context warning (only if threshold is set and not yet autosaved)
+      if (!autoSaveState.hasReachedWarningThreshold) {
+        markWarningThresholdReached(contextPercent);
+      }
+      console.log(`${ANSI.yellow}⚠ Context at ${contextPercent}%. Run /clear${ANSI.reset}`);
+    } else if (autoSaveState.hasReachedWarningThreshold && !autoSaveState.hasSavedThisSession) {
+      // Keep showing warning persistently even if context drops
+      console.log(`${ANSI.yellow}⚠ Context at ${autoSaveState.warningContextPercent}%. Run /clear${ANSI.reset}`);
+    }
   }
 
   // === Auto-save logic (runs after statusline display) ===
@@ -177,12 +194,12 @@ async function handleStatusline() {
 }
 
 /**
- * Create a context strip with 10 circles (each = 10%)
+ * Create a context strip with 5 circles (each = 20%)
  * ● = filled, ○ = empty
- * Color: green (<70%), yellow (70-84%), red (>=85%)
+ * Color: brick (<70%), yellow (70-84%), red (>=85%)
  */
 function createContextStrip(percent: number): string {
-  const totalCircles = 10;
+  const totalCircles = 5;
   const filled = Math.round((percent / 100) * totalCircles);
   const empty = totalCircles - filled;
 
@@ -395,6 +412,9 @@ async function handleSmartCompact() {
 async function handlePreCompact() {
   const stdin = await readStdin();
   const config = loadConfig();
+
+  // Clear the persistent save notification (user is running /clear)
+  resetAutoSaveState();
 
   if (!config.archive.autoOnCompact) {
     return;

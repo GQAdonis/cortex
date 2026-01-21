@@ -7,12 +7,12 @@
 // Configuration
 // ============================================================================
 
-const MODEL_NAME = 'Xenova/bge-small-en-v1.5';
-const EMBEDDING_DIM = 384;
+const MODEL_NAME = 'nomic-ai/nomic-embed-text-v1.5';
+const EMBEDDING_DIM = 768;
 
-// Prefixes for BGE models
-const PASSAGE_PREFIX = 'passage: ';
-const QUERY_PREFIX = 'query: ';
+// Prefixes for Nomic Embed v1.5 (requires task prefixes)
+const PASSAGE_PREFIX = 'search_document: ';
+const QUERY_PREFIX = 'search_query: ';
 
 // ============================================================================
 // Embedder State

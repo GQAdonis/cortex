@@ -17,7 +17,7 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
   showFragments: true,
   showLastArchive: true,
   showContext: true,
-  contextWarningThreshold: 70,
+  contextWarningThreshold: 60,
 };
 
 export const DEFAULT_ARCHIVE_CONFIG: ArchiveConfig = {
@@ -31,11 +31,12 @@ export const DEFAULT_MONITOR_CONFIG: MonitorConfig = {
 };
 
 export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
-  autoSaveThreshold: 70,
+  autoSaveThreshold: 80,
   autoClearThreshold: 80,
   autoClearEnabled: false,
-  restorationTokenBudget: 1000,
+  restorationTokenBudget: 2000,
   restorationMessageCount: 5,
+  restorationTurnCount: 3,  // Last 3 turns (user+assistant pairs) for precise restoration
 };
 
 export const DEFAULT_SETUP_CONFIG: SetupConfig = {
@@ -184,8 +185,9 @@ export const CONFIG_PRESETS: Record<ConfigPreset, Partial<Config>> = {
       autoSaveThreshold: 70,
       autoClearThreshold: 80,
       autoClearEnabled: false,
-      restorationTokenBudget: 1000,
+      restorationTokenBudget: 2000,
       restorationMessageCount: 5,
+      restorationTurnCount: 3,
     },
   },
   essential: {
@@ -208,8 +210,9 @@ export const CONFIG_PRESETS: Record<ConfigPreset, Partial<Config>> = {
       autoSaveThreshold: 75,
       autoClearThreshold: 85,
       autoClearEnabled: false,
-      restorationTokenBudget: 800,
+      restorationTokenBudget: 1500,
       restorationMessageCount: 5,
+      restorationTurnCount: 3,
     },
   },
   minimal: {
@@ -232,8 +235,9 @@ export const CONFIG_PRESETS: Record<ConfigPreset, Partial<Config>> = {
       autoSaveThreshold: 85,
       autoClearThreshold: 90,
       autoClearEnabled: false,
-      restorationTokenBudget: 500,
+      restorationTokenBudget: 1000,
       restorationMessageCount: 3,
+      restorationTurnCount: 2,
     },
   },
 };
@@ -357,6 +361,8 @@ interface AutoSaveState {
   lastAutoSaveContext: number;
   transcriptPath: string | null;
   hasSavedThisSession: boolean;
+  hasReachedWarningThreshold: boolean;
+  warningContextPercent: number;
 }
 
 const DEFAULT_AUTO_SAVE_STATE: AutoSaveState = {
@@ -364,6 +370,8 @@ const DEFAULT_AUTO_SAVE_STATE: AutoSaveState = {
   lastAutoSaveContext: 0,
   transcriptPath: null,
   hasSavedThisSession: false,
+  hasReachedWarningThreshold: false,
+  warningContextPercent: 0,
 };
 
 /**
@@ -442,4 +450,14 @@ export function markAutoSaved(transcriptPath: string | null, contextPercent: num
  */
 export function resetAutoSaveState(): void {
   saveAutoSaveState({ ...DEFAULT_AUTO_SAVE_STATE });
+}
+
+/**
+ * Mark that context has reached warning threshold
+ */
+export function markWarningThresholdReached(contextPercent: number): void {
+  const state = loadAutoSaveState();
+  state.hasReachedWarningThreshold = true;
+  state.warningContextPercent = contextPercent;
+  saveAutoSaveState(state);
 }

@@ -108,8 +108,9 @@ export interface AutomationConfig {
   autoSaveThreshold: number;      // Context % to trigger auto-save (default 70)
   autoClearThreshold: number;     // Context % to trigger auto-clear (default 80)
   autoClearEnabled: boolean;      // Whether to auto-clear after save (default false)
-  restorationTokenBudget: number; // Max tokens for restoration context (default 1000)
-  restorationMessageCount: number; // Number of recent messages to restore (default 5)
+  restorationTokenBudget: number; // Max tokens for restoration context (default 2000)
+  restorationMessageCount: number; // Number of semantic fragments to restore (default 5)
+  restorationTurnCount: number;   // Number of raw conversation turns to restore (default 3)
 }
 
 export interface SetupConfig {
@@ -146,6 +147,29 @@ export interface TranscriptMessage {
 }
 
 // ============================================================================
+// Session Turn Types (for precise restoration after /clear)
+// ============================================================================
+
+export interface SessionTurn {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  projectId: string | null;
+  sessionId: string;
+  turnIndex: number;
+  timestamp: Date;
+}
+
+export interface TurnInput {
+  role: 'user' | 'assistant';
+  content: string;
+  projectId: string | null;
+  sessionId: string;
+  turnIndex: number;
+  timestamp: Date;
+}
+
+// ============================================================================
 // CLI Command Types
 // ============================================================================
 
@@ -156,6 +180,7 @@ export type CommandName =
   | 'context-check'
   | 'pre-compact'
   | 'smart-compact'
+  | 'clear-reminder'
   | 'save'
   | 'archive'
   | 'recall'
