@@ -10,7 +10,7 @@
 
 ```
 Ψ 47 ●●○○○ 45%
-✓ Autosaved ⚠ Run /clear
+✓ Autosaved
 ```
 
 ## Why Cortex?
@@ -78,7 +78,7 @@ The statusline is configured automatically by `/cortex-setup`. Restart Claude Co
 
 ```
 Ψ 47 ●●○○○ 45%
-✓ Autosaved ⚠ Run /clear
+✓ Autosaved
 ```
 
 **Line 1:**

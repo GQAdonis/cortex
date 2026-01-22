@@ -213,7 +213,7 @@ async function handleStatusline() {
 
     // Inline indicator if saved recently
     if (wasRecentlySaved()) {
-      parts.push(`${ANSI.green}✓ saved${ANSI.reset}`);
+      parts.push(`${ANSI.green}✓ Autosaved${ANSI.reset}`);
     }
 
     // Output main statusline (no separators)
