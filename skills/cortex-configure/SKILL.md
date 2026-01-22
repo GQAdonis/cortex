@@ -18,13 +18,11 @@ Offer quick presets for common configurations:
 **Full** - All features enabled
 - Statusline: enabled
 - Auto-archive: enabled
-- Context warnings: 70%
 - Auto-save threshold: 70%
 
 **Essential** - Core features only
 - Statusline: enabled
 - Auto-archive: enabled
-- Context warnings: 80%
 - Auto-save threshold: 75%
 
 **Minimal** - Commands only
@@ -40,23 +38,15 @@ Allow fine-tuning of specific settings:
    - When to automatically save context
    - Default: 70%
 
-2. **Auto-clear Enabled** (true/false)
-   - Whether to auto-clear after saving
-   - Default: false
-
-3. **Auto-clear Threshold** (0-100%)
-   - When to trigger auto-clear
-   - Default: 80%
-
-4. **Restoration Token Budget** (number)
+2. **Restoration Token Budget** (number)
    - Max tokens for restoration context
-   - Default: 1000
+   - Default: 2000
 
-5. **Restoration Message Count** (number)
+3. **Restoration Message Count** (number)
    - Number of messages to restore
    - Default: 5
 
-6. **Statusline Enabled** (true/false)
+4. **Statusline Enabled** (true/false)
    - Show Cortex in status line
    - Default: true
 
@@ -85,8 +75,7 @@ Location: `~/.cortex/config.json`
     "enabled": true,
     "showFragments": true,
     "showLastArchive": true,
-    "showContext": true,
-    "contextWarningThreshold": 70
+    "showContext": true
   },
   "archive": {
     "autoOnCompact": true,
@@ -95,9 +84,7 @@ Location: `~/.cortex/config.json`
   },
   "automation": {
     "autoSaveThreshold": 70,
-    "autoClearThreshold": 80,
-    "autoClearEnabled": false,
-    "restorationTokenBudget": 1000,
+    "restorationTokenBudget": 2000,
     "restorationMessageCount": 5
   }
 }

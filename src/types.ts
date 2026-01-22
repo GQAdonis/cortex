@@ -104,26 +104,34 @@ export interface StatuslineConfig {
   showFragments: boolean;
   showLastArchive: boolean;
   showContext: boolean;
-  contextWarningThreshold: number;
 }
 
 export interface ArchiveConfig {
-  autoOnCompact: boolean;
   projectScope: boolean;
   minContentLength: number;
 }
 
-export interface MonitorConfig {
-  tokenThreshold: number;
+// MonitorConfig removed - no longer using context threshold warnings
+
+export interface AutosaveConfig {
+  // Save on session end (logout, exit, close)
+  onSessionEnd: boolean;
+
+  // Save before compact (/clear, /compact, auto-compact)
+  onPreCompact: boolean;
+
+  // Time interval trigger (approximate - checked during tool use)
+  // Replaced by Context Step
+  contextStep: {
+    enabled: boolean;
+    step: number;     // Save every X% increase
+  };
 }
 
-export interface AutomationConfig {
-  autoSaveThreshold: number;      // Context % to trigger auto-save (default 70)
-  autoClearThreshold: number;     // Context % to trigger auto-clear (default 80)
-  autoClearEnabled: boolean;      // Whether to auto-clear after save (default false)
-  restorationTokenBudget: number; // Max tokens for restoration context (default 2000)
-  restorationMessageCount: number; // Number of semantic fragments to restore (default 5)
-  restorationTurnCount: number;   // Number of raw conversation turns to restore (default 3)
+export interface RestorationConfig {
+  tokenBudget: number;      // Max tokens for restoration context (default 2000)
+  messageCount: number;     // Number of semantic fragments to restore (default 5)
+  turnCount: number;        // Number of raw conversation turns to restore (default 3)
 }
 
 export interface SetupConfig {
@@ -134,8 +142,8 @@ export interface SetupConfig {
 export interface Config {
   statusline: StatuslineConfig;
   archive: ArchiveConfig;
-  monitor: MonitorConfig;
-  automation: AutomationConfig;
+  autosave: AutosaveConfig;
+  restoration: RestorationConfig;
   setup: SetupConfig;
 }
 
@@ -203,10 +211,12 @@ export interface TurnInput {
 export type CommandName =
   | 'statusline'
   | 'session-start'
+  | 'session-end'
   | 'monitor'
   | 'context-check'
   | 'pre-compact'
   | 'smart-compact'
+  | 'post-tool'
   | 'clear-reminder'
   | 'save'
   | 'archive'

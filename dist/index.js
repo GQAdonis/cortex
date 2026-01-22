@@ -4150,6 +4150,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 function getDataDir() {
+  if (process.env.CORTEX_DATA_DIR) {
+    return process.env.CORTEX_DATA_DIR;
+  }
   const home = os.homedir();
   return path.join(home, ".cortex");
 }
@@ -4199,9 +4202,9 @@ function loadConfig() {
     const result = ConfigSchema.safeParse(merged);
     if (!result.success) {
       const errors = result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`);
-      console.error(`[Cortex] Config validation errors:
+      console.error(`Config validation errors:
   ${errors.join("\n  ")}`);
-      console.error("[Cortex] Using default configuration");
+      console.error("Using default configuration");
       return DEFAULT_CONFIG;
     }
     return result.data;
@@ -4258,13 +4261,11 @@ function saveSessions(sessions) {
   atomicWriteFileSync(getSessionsPath(), JSON.stringify(sessions, null, 2));
 }
 function saveCurrentSession(transcriptPath, projectId) {
-  if (!projectId) {
-    return;
-  }
+  const key = projectId || GLOBAL_SESSION_KEY;
   const sessions = loadSessions();
-  sessions[projectId] = {
+  sessions[key] = {
     transcriptPath,
-    projectId,
+    projectId: projectId || GLOBAL_SESSION_KEY,
     savedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   saveSessions(sessions);
@@ -4295,41 +4296,37 @@ function saveAutoSaveState(state) {
   ensureDataDir();
   atomicWriteFileSync(getAutoSaveStatePath(), JSON.stringify(state, null, 2));
 }
-function shouldAutoSave(currentContext, transcriptPath, threshold) {
-  if (currentContext < threshold) {
+function shouldAutoSave(currentContext, transcriptPath) {
+  if (!transcriptPath)
     return false;
-  }
   const state = loadAutoSaveState();
-  if (transcriptPath && state.transcriptPath !== transcriptPath) {
-    return true;
+  const config = loadConfig();
+  if (state.transcriptPath !== transcriptPath) {
+    return currentContext >= config.autosave.contextStep.step;
   }
-  if (state.hasSavedThisSession) {
-    return false;
-  }
-  return true;
+  const diff = currentContext - state.lastSaveContext;
+  return diff >= config.autosave.contextStep.step;
 }
-function markAutoSaved(transcriptPath, contextPercent) {
-  const currentState = loadAutoSaveState();
+function markAutoSaved(transcriptPath, contextPercent, fragments) {
   const state = {
-    lastAutoSaveTimestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    lastAutoSaveContext: contextPercent,
-    transcriptPath,
-    hasSavedThisSession: true,
-    hasReachedWarningThreshold: currentState.hasReachedWarningThreshold,
-    warningContextPercent: currentState.warningContextPercent
+    lastSaveTimestamp: Date.now(),
+    lastSaveContext: contextPercent,
+    lastSaveFragments: fragments,
+    transcriptPath
   };
   saveAutoSaveState(state);
+}
+function wasRecentlySaved(windowMs = 5e3) {
+  const state = loadAutoSaveState();
+  if (state.lastSaveTimestamp === 0)
+    return false;
+  const elapsed = Date.now() - state.lastSaveTimestamp;
+  return elapsed < windowMs;
 }
 function resetAutoSaveState() {
   saveAutoSaveState({ ...DEFAULT_AUTO_SAVE_STATE });
 }
-function markWarningThresholdReached(contextPercent) {
-  const state = loadAutoSaveState();
-  state.hasReachedWarningThreshold = true;
-  state.warningContextPercent = contextPercent;
-  saveAutoSaveState(state);
-}
-var StatuslineConfigSchema, ArchiveConfigSchema, MonitorConfigSchema, AutomationConfigSchema, SetupConfigSchema, ConfigSchema, DEFAULT_STATUSLINE_CONFIG, DEFAULT_ARCHIVE_CONFIG, DEFAULT_MONITOR_CONFIG, DEFAULT_AUTOMATION_CONFIG, DEFAULT_SETUP_CONFIG, DEFAULT_CONFIG, CONFIG_PRESETS, DEFAULT_AUTO_SAVE_STATE;
+var StatuslineConfigSchema, ArchiveConfigSchema, AutosaveConfigSchema, RestorationConfigSchema, SetupConfigSchema, ConfigSchema, DEFAULT_STATUSLINE_CONFIG, DEFAULT_ARCHIVE_CONFIG, DEFAULT_AUTOSAVE_CONFIG, DEFAULT_RESTORATION_CONFIG, DEFAULT_SETUP_CONFIG, DEFAULT_CONFIG, CONFIG_PRESETS, GLOBAL_SESSION_KEY, DEFAULT_AUTO_SAVE_STATE;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -4338,24 +4335,24 @@ var init_config = __esm({
       enabled: external_exports.boolean(),
       showFragments: external_exports.boolean(),
       showLastArchive: external_exports.boolean(),
-      showContext: external_exports.boolean(),
-      contextWarningThreshold: external_exports.number().min(0).max(100)
+      showContext: external_exports.boolean()
     });
     ArchiveConfigSchema = external_exports.object({
-      autoOnCompact: external_exports.boolean(),
       projectScope: external_exports.boolean(),
       minContentLength: external_exports.number().min(0).max(1e4)
     });
-    MonitorConfigSchema = external_exports.object({
-      tokenThreshold: external_exports.number().min(0).max(100)
+    AutosaveConfigSchema = external_exports.object({
+      onSessionEnd: external_exports.boolean(),
+      onPreCompact: external_exports.boolean(),
+      contextStep: external_exports.object({
+        enabled: external_exports.boolean(),
+        step: external_exports.number().min(1).max(100)
+      })
     });
-    AutomationConfigSchema = external_exports.object({
-      autoSaveThreshold: external_exports.number().min(0).max(100),
-      autoClearThreshold: external_exports.number().min(0).max(100),
-      autoClearEnabled: external_exports.boolean(),
-      restorationTokenBudget: external_exports.number().min(0).max(5e4),
-      restorationMessageCount: external_exports.number().min(0).max(50),
-      restorationTurnCount: external_exports.number().min(0).max(50)
+    RestorationConfigSchema = external_exports.object({
+      tokenBudget: external_exports.number().min(0).max(5e4),
+      messageCount: external_exports.number().min(0).max(50),
+      turnCount: external_exports.number().min(0).max(50)
     });
     SetupConfigSchema = external_exports.object({
       completed: external_exports.boolean(),
@@ -4364,33 +4361,33 @@ var init_config = __esm({
     ConfigSchema = external_exports.object({
       statusline: StatuslineConfigSchema,
       archive: ArchiveConfigSchema,
-      monitor: MonitorConfigSchema,
-      automation: AutomationConfigSchema,
+      autosave: AutosaveConfigSchema,
+      restoration: RestorationConfigSchema,
       setup: SetupConfigSchema
     });
     DEFAULT_STATUSLINE_CONFIG = {
       enabled: true,
       showFragments: true,
       showLastArchive: true,
-      showContext: true,
-      contextWarningThreshold: 60
+      showContext: true
     };
     DEFAULT_ARCHIVE_CONFIG = {
-      autoOnCompact: true,
       projectScope: true,
       minContentLength: 50
     };
-    DEFAULT_MONITOR_CONFIG = {
-      tokenThreshold: 70
+    DEFAULT_AUTOSAVE_CONFIG = {
+      onSessionEnd: true,
+      onPreCompact: true,
+      contextStep: {
+        enabled: true,
+        step: 5
+        // Save every 5% increase in context
+      }
     };
-    DEFAULT_AUTOMATION_CONFIG = {
-      autoSaveThreshold: 80,
-      autoClearThreshold: 80,
-      autoClearEnabled: false,
-      restorationTokenBudget: 2e3,
-      restorationMessageCount: 5,
-      restorationTurnCount: 3
-      // Last 3 turns (user+assistant pairs) for precise restoration
+    DEFAULT_RESTORATION_CONFIG = {
+      tokenBudget: 2e3,
+      messageCount: 5,
+      turnCount: 3
     };
     DEFAULT_SETUP_CONFIG = {
       completed: false,
@@ -4399,8 +4396,8 @@ var init_config = __esm({
     DEFAULT_CONFIG = {
       statusline: DEFAULT_STATUSLINE_CONFIG,
       archive: DEFAULT_ARCHIVE_CONFIG,
-      monitor: DEFAULT_MONITOR_CONFIG,
-      automation: DEFAULT_AUTOMATION_CONFIG,
+      autosave: DEFAULT_AUTOSAVE_CONFIG,
+      restoration: DEFAULT_RESTORATION_CONFIG,
       setup: DEFAULT_SETUP_CONFIG
     };
     CONFIG_PRESETS = {
@@ -4409,24 +4406,24 @@ var init_config = __esm({
           enabled: true,
           showFragments: true,
           showLastArchive: true,
-          showContext: true,
-          contextWarningThreshold: 70
+          showContext: true
         },
         archive: {
-          autoOnCompact: true,
           projectScope: true,
           minContentLength: 50
         },
-        monitor: {
-          tokenThreshold: 70
+        autosave: {
+          onSessionEnd: true,
+          onPreCompact: true,
+          contextStep: {
+            enabled: true,
+            step: 5
+          }
         },
-        automation: {
-          autoSaveThreshold: 70,
-          autoClearThreshold: 80,
-          autoClearEnabled: false,
-          restorationTokenBudget: 2e3,
-          restorationMessageCount: 5,
-          restorationTurnCount: 3
+        restoration: {
+          tokenBudget: 3e3,
+          messageCount: 5,
+          turnCount: 5
         }
       },
       essential: {
@@ -4434,24 +4431,24 @@ var init_config = __esm({
           enabled: true,
           showFragments: true,
           showLastArchive: false,
-          showContext: true,
-          contextWarningThreshold: 80
+          showContext: true
         },
         archive: {
-          autoOnCompact: true,
           projectScope: true,
           minContentLength: 100
         },
-        monitor: {
-          tokenThreshold: 80
+        autosave: {
+          onSessionEnd: true,
+          onPreCompact: true,
+          contextStep: {
+            enabled: true,
+            step: 10
+          }
         },
-        automation: {
-          autoSaveThreshold: 75,
-          autoClearThreshold: 85,
-          autoClearEnabled: false,
-          restorationTokenBudget: 1500,
-          restorationMessageCount: 5,
-          restorationTurnCount: 3
+        restoration: {
+          tokenBudget: 1500,
+          messageCount: 5,
+          turnCount: 3
         }
       },
       minimal: {
@@ -4459,34 +4456,33 @@ var init_config = __esm({
           enabled: false,
           showFragments: false,
           showLastArchive: false,
-          showContext: false,
-          contextWarningThreshold: 90
+          showContext: false
         },
         archive: {
-          autoOnCompact: false,
           projectScope: true,
           minContentLength: 50
         },
-        monitor: {
-          tokenThreshold: 90
+        autosave: {
+          onSessionEnd: true,
+          onPreCompact: true,
+          contextStep: {
+            enabled: false,
+            step: 20
+          }
         },
-        automation: {
-          autoSaveThreshold: 85,
-          autoClearThreshold: 90,
-          autoClearEnabled: false,
-          restorationTokenBudget: 1e3,
-          restorationMessageCount: 3,
-          restorationTurnCount: 2
+        restoration: {
+          tokenBudget: 1e3,
+          messageCount: 3,
+          turnCount: 2
         }
       }
     };
+    GLOBAL_SESSION_KEY = "_global";
     DEFAULT_AUTO_SAVE_STATE = {
-      lastAutoSaveTimestamp: null,
-      lastAutoSaveContext: 0,
-      transcriptPath: null,
-      hasSavedThisSession: false,
-      hasReachedWarningThreshold: false,
-      warningContextPercent: 0
+      lastSaveTimestamp: 0,
+      lastSaveContext: 0,
+      lastSaveFragments: 0,
+      transcriptPath: null
     };
   }
 });
@@ -8311,7 +8307,7 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
     return result;
   }
   if (parseStats.parseErrors > 0) {
-    console.error(`[Cortex] Warning: ${parseStats.parseErrors} lines failed to parse in transcript`);
+    console.error(`Warning: ${parseStats.parseErrors} lines failed to parse in transcript`);
   }
   const contentToArchive = [];
   for (const message of messages) {
@@ -8373,7 +8369,7 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
       result.archived++;
     }
   }
-  const turnCount = config.automation.restorationTurnCount * 2;
+  const turnCount = config.restoration.turnCount * 2;
   await saveSessionTurns(db, transcriptPath, projectId, turnCount);
   const insights = extractSessionInsights(messages);
   if (insights.summary || insights.decisions.length > 0 || insights.outcomes.length > 0) {
@@ -8408,8 +8404,8 @@ async function buildRestorationContext(db, projectId, options = {}) {
   const config = loadConfig();
   const {
     messageCount = 5,
-    tokenBudget = config.automation.restorationTokenBudget,
-    turnCount = config.automation.restorationTurnCount * 2
+    tokenBudget = config.restoration.tokenBudget,
+    turnCount = config.restoration.turnCount * 2
     // * 2 for user+assistant pairs
   } = options;
   const tokensPerChar = 0.25;
@@ -8594,16 +8590,6 @@ function endSession() {
   saveAnalytics(analytics);
   return session;
 }
-function updateContextPercent(percent) {
-  const analytics = getAnalytics();
-  if (!analytics.currentSession) {
-    return;
-  }
-  if (percent > analytics.currentSession.peakContextPercent) {
-    analytics.currentSession.peakContextPercent = percent;
-    saveAnalytics(analytics);
-  }
-}
 function recordSavePoint(contextPercent, fragmentsSaved) {
   const analytics = getAnalytics();
   if (!analytics.currentSession) {
@@ -8618,14 +8604,6 @@ function recordSavePoint(contextPercent, fragmentsSaved) {
   analytics.currentSession.fragmentsCreated += fragmentsSaved;
   saveAnalytics(analytics);
 }
-function recordClear() {
-  const analytics = getAnalytics();
-  if (!analytics.currentSession) {
-    return;
-  }
-  analytics.currentSession.clearCount++;
-  saveAnalytics(analytics);
-}
 function generateSessionId() {
   const timestamp = Date.now().toString(36);
   const random = Math.random().toString(36).substring(2, 8);
@@ -8633,6 +8611,9 @@ function generateSessionId() {
 }
 
 // src/index.ts
+import { appendFileSync, existsSync as existsSync5, mkdirSync as mkdirSync2 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join3 } from "path";
 var ANSI = {
   reset: "\x1B[0m",
   bold: "\x1B[1m",
@@ -8647,9 +8628,32 @@ var ANSI = {
   brick: "\x1B[38;2;217;119;87m"
   // Claude terracotta/brick #D97757
 };
+var DEBUG_ENABLED = process.env.CORTEX_DEBUG === "1" || process.env.CORTEX_DEBUG === "true";
+var DEBUG_LOG_DIR = join3(homedir2(), ".cortex", "logs");
+var DEBUG_LOG_FILE = join3(DEBUG_LOG_DIR, "hook-debug.log");
+function debugLog(context, message, data) {
+  if (!DEBUG_ENABLED)
+    return;
+  try {
+    if (!existsSync5(DEBUG_LOG_DIR)) {
+      mkdirSync2(DEBUG_LOG_DIR, { recursive: true });
+    }
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const logEntry = `[${timestamp}] [${context}] ${message}${data ? "\n  DATA: " + JSON.stringify(data, null, 2).replace(/\n/g, "\n  ") : ""}
+`;
+    appendFileSync(DEBUG_LOG_FILE, logEntry);
+  } catch {
+  }
+}
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
+  debugLog("main", `Command invoked: ${command || "statusline (default)"}`, {
+    args,
+    cwd: process.cwd(),
+    pluginRoot: process.env.CLAUDE_PLUGIN_ROOT,
+    projectDir: process.env.CLAUDE_PROJECT_DIR
+  });
   try {
     switch (command) {
       case "statusline":
@@ -8658,20 +8662,21 @@ async function main() {
       case "session-start":
         await handleSessionStart();
         break;
-      case "monitor":
-        await handleMonitor();
+      case "session-end":
+        await handleSessionEnd();
         break;
+      case "monitor":
       case "context-check":
-        await handleContextCheck();
         break;
       case "clear-reminder":
-        await handleClearReminder();
+      case "post-tool":
+        await handlePostTool();
         break;
       case "pre-compact":
         await handlePreCompact();
         break;
       case "smart-compact":
-        await handleSmartCompact();
+        await handlePreCompact();
         break;
       case "save":
       case "archive":
@@ -8700,7 +8705,12 @@ async function main() {
         await handleStatusline();
         break;
     }
+    debugLog("main", `Command completed successfully: ${command || "statusline"}`);
   } catch (error) {
+    debugLog("main", `Command failed: ${command}`, {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : void 0
+    });
     console.error(`[Cortex Error] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   } finally {
@@ -8712,14 +8722,24 @@ async function handleStatusline() {
   const config = loadConfig();
   const db = await initDb();
   let contextPercent = 0;
-  let projectId = null;
   if (stdin?.cwd) {
-    projectId = getProjectId(stdin.cwd);
     contextPercent = getContextPercent(stdin);
+    if (config.autosave.contextStep.enabled && stdin.transcript_path) {
+      if (shouldAutoSave(contextPercent, stdin.transcript_path)) {
+        const projectId = getProjectId(stdin.cwd);
+        const result = await archiveSession(db, stdin.transcript_path, projectId);
+        if (result.archived > 0) {
+          markAutoSaved(stdin.transcript_path, contextPercent, result.archived);
+          recordSavePoint(contextPercent, result.archived);
+        } else {
+          markAutoSaved(stdin.transcript_path, contextPercent, 0);
+        }
+      }
+    }
   }
   if (config.statusline.enabled) {
     const stats = getStats(db);
-    const parts = [`${ANSI.brick}\u223F\u223F${ANSI.reset}`];
+    const parts = [`${ANSI.brick}\u03A8${ANSI.reset}`];
     if (config.statusline.showFragments) {
       parts.push(`${stats.fragmentCount}`);
     }
@@ -8727,35 +8747,10 @@ async function handleStatusline() {
       const contextStrip = createContextStrip(contextPercent);
       parts.push(contextStrip);
     }
+    if (wasRecentlySaved()) {
+      parts.push(`${ANSI.green}\u2713 saved${ANSI.reset}`);
+    }
     console.log(parts.join(" "));
-    const autoSaveState = loadAutoSaveState();
-    const warningThreshold = config.statusline.contextWarningThreshold;
-    if (autoSaveState.hasSavedThisSession) {
-      console.log(`${ANSI.green}\u2713 Autosaved${ANSI.reset} ${ANSI.yellow}\u26A0 Run /clear${ANSI.reset}`);
-    } else if (warningThreshold > 0 && contextPercent >= warningThreshold) {
-      if (!autoSaveState.hasReachedWarningThreshold) {
-        markWarningThresholdReached(contextPercent);
-      }
-      console.log(`${ANSI.yellow}\u26A0 Context at ${contextPercent}%. Run /clear${ANSI.reset}`);
-    } else if (autoSaveState.hasReachedWarningThreshold && !autoSaveState.hasSavedThisSession) {
-      console.log(`${ANSI.yellow}\u26A0 Context at ${autoSaveState.warningContextPercent}%. Run /clear${ANSI.reset}`);
-    }
-  }
-  if (contextPercent > 0 && config.automation.autoClearEnabled) {
-    const transcriptPath = stdin?.transcript_path || null;
-    if (shouldAutoSave(contextPercent, transcriptPath, config.automation.autoSaveThreshold)) {
-      updateContextPercent(contextPercent);
-      if (transcriptPath) {
-        const result = await archiveSession(db, transcriptPath, projectId);
-        if (result.archived > 0) {
-          recordSavePoint(contextPercent, result.archived);
-          markAutoSaved(transcriptPath, contextPercent);
-          console.log(`${ANSI.yellow}[Cortex]${ANSI.reset} Auto-saved ${result.archived} fragments. Run ${ANSI.cyan}/clear${ANSI.reset} to continue.`);
-        } else {
-          markAutoSaved(transcriptPath, contextPercent);
-        }
-      }
-    }
   }
 }
 function createContextStrip(percent) {
@@ -8775,145 +8770,124 @@ function createContextStrip(percent) {
   return `${color}${filledCircles}${ANSI.dim}${emptyCircles}${ANSI.reset} ${percent}%`;
 }
 async function handleSessionStart() {
+  debugLog("handleSessionStart", "Hook invoked");
   const stdin = await readStdin();
+  debugLog("handleSessionStart", "Stdin received", { hasStdin: !!stdin, cwd: stdin?.cwd, transcriptPath: stdin?.transcript_path });
   const config = loadConfig();
   if (!config.setup.completed) {
-    console.log(`${ANSI.yellow}[Cortex]${ANSI.reset} First run detected. Run ${ANSI.cyan}/cortex:setup${ANSI.reset} to initialize.`);
+    debugLog("handleSessionStart", "Setup not completed, showing first-run message");
+    console.log(`${ANSI.brick}\u03A8${ANSI.reset} ${ANSI.yellow}First run detected. Run ${ANSI.cyan}/cortex:setup${ANSI.reset} to initialize.`);
     return;
   }
   resetAutoSaveState();
   const db = await initDb();
-  const projectId = stdin?.cwd ? getProjectId(stdin.cwd) : null;
+  const rawProjectId = stdin?.cwd ? getProjectId(stdin.cwd) : null;
+  const projectId = rawProjectId === "unknown" ? null : rawProjectId;
   if (stdin?.transcript_path) {
     saveCurrentSession(stdin.transcript_path, projectId);
   }
   startSession(projectId);
   const projectStats = projectId ? getProjectStats(db, projectId) : null;
+  const restoration = await buildRestorationContext(db, projectId, {
+    messageCount: config.restoration.messageCount,
+    tokenBudget: config.restoration.tokenBudget
+  });
   if (projectStats && projectStats.fragmentCount > 0) {
-    const restoration = await buildRestorationContext(db, projectId, {
-      messageCount: config.automation.restorationMessageCount,
-      tokenBudget: config.automation.restorationTokenBudget
-    });
-    console.log(`${ANSI.cyan}[Cortex]${ANSI.reset} ${projectStats.fragmentCount} memories for ${ANSI.bold}${projectId}${ANSI.reset}`);
-    if (restoration.hasContent) {
-      console.log("");
-      console.log(`${ANSI.dim}--- Restoration Context ---${ANSI.reset}`);
-      console.log(formatRestorationContext(restoration));
-      console.log(`${ANSI.dim}---------------------------${ANSI.reset}`);
-    }
+    console.log(`${ANSI.brick}\u03A8${ANSI.reset} ${ANSI.cyan}${projectStats.fragmentCount} memories for ${ANSI.bold}${projectId}${ANSI.reset}`);
   } else if (projectId) {
-    console.log(`${ANSI.cyan}[Cortex]${ANSI.reset} Ready for ${ANSI.bold}${projectId}${ANSI.reset} (no memories yet)`);
+    console.log(`${ANSI.brick}\u03A8${ANSI.reset} ${ANSI.cyan}Ready for ${ANSI.bold}${projectId}${ANSI.reset} (no memories yet)`);
   } else {
-    console.log(`${ANSI.cyan}[Cortex]${ANSI.reset} Session started`);
+    console.log(`${ANSI.brick}\u03A8${ANSI.reset} ${ANSI.cyan}Session started`);
+  }
+  if (restoration.hasContent) {
+    console.log("");
+    console.log(`${ANSI.dim}--- Restoration Context ---${ANSI.reset}`);
+    console.log(formatRestorationContext(restoration));
+    console.log(`${ANSI.dim}---------------------------${ANSI.reset}`);
   }
 }
-async function handleMonitor() {
+async function handleSessionEnd() {
+  debugLog("handleSessionEnd", "Hook invoked");
   const stdin = await readStdin();
   const config = loadConfig();
-  if (!stdin)
-    return;
-  const contextPercent = getContextPercent(stdin);
-  updateContextPercent(contextPercent);
-  if (contextPercent >= config.monitor.tokenThreshold) {
-    console.log(`${ANSI.yellow}[Cortex]${ANSI.reset} Context at ${contextPercent}% - consider archiving with /cortex:save`);
-  }
-}
-async function handleClearReminder() {
-  const stdin = await readStdin();
-  const config = loadConfig();
-  if (!stdin || !config.automation.autoClearEnabled)
-    return;
-  const state = loadAutoSaveState();
-  if (state.hasSavedThisSession) {
-    const contextPercent = getContextPercent(stdin);
-    const output = {
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        additionalContext: `[Cortex] Session auto-saved at ${state.lastAutoSaveContext}% context. Tell the user: "Your session has been auto-saved. Run /clear when ready to free up context - restoration context will help continue where we left off."`
-      }
-    };
-    console.log(JSON.stringify(output));
-  }
-}
-async function handleContextCheck() {
-  const stdin = await readStdin();
-  const config = loadConfig();
-  if (!stdin)
-    return;
-  const contextPercent = getContextPercent(stdin);
-  updateContextPercent(contextPercent);
-  if (contextPercent >= config.automation.autoClearThreshold && config.automation.autoClearEnabled) {
-    console.log(`${ANSI.yellow}[Cortex]${ANSI.reset} Context at ${contextPercent}%. Triggering smart compaction...`);
-    await handleSmartCompact();
+  if (!config.autosave.onSessionEnd) {
+    debugLog("handleSessionEnd", "Disabled by config");
     return;
   }
-  if (contextPercent >= config.automation.autoSaveThreshold) {
-    const db = await initDb();
-    const projectId = stdin.cwd ? getProjectId(stdin.cwd) : null;
-    if (stdin.transcript_path) {
-      console.log(`${ANSI.cyan}[Cortex]${ANSI.reset} Context at ${contextPercent}%. Auto-saving...`);
-      const result = await archiveSession(db, stdin.transcript_path, projectId);
-      if (result.archived > 0) {
-        recordSavePoint(contextPercent, result.archived);
-        console.log(`${ANSI.green}[Cortex]${ANSI.reset} Auto-saved ${result.archived} fragments`);
-      }
-    }
-  }
-}
-async function handleSmartCompact() {
-  const stdin = await readStdin();
-  const config = loadConfig();
   if (!stdin?.transcript_path) {
-    console.log(`${ANSI.red}[Cortex]${ANSI.reset} No transcript available for compaction`);
+    debugLog("handleSessionEnd", "No transcript path - aborting");
     return;
   }
   const db = await initDb();
   const projectId = stdin.cwd ? getProjectId(stdin.cwd) : null;
-  const contextPercent = getContextPercent(stdin);
-  console.log(`${ANSI.cyan}[Cortex]${ANSI.reset} Smart compaction starting...`);
-  const result = await archiveSession(db, stdin.transcript_path, projectId, {
-    onProgress: (current, total) => {
-      process.stdout.write(`\r${ANSI.dim}[Cortex] Archiving ${current}/${total}...${ANSI.reset}`);
-    }
-  });
-  console.log("");
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} ${ANSI.cyan}Saving session before exit...`);
+  const result = await archiveSession(db, stdin.transcript_path, projectId);
   if (result.archived > 0) {
-    recordSavePoint(contextPercent, result.archived);
-    console.log(`${ANSI.green}[Cortex]${ANSI.reset} Archived ${result.archived} fragments`);
+    console.log(`${ANSI.brick}\u03A8${ANSI.reset} ${ANSI.green}Saved ${result.archived} memories`);
   }
-  const restoration = await buildRestorationContext(db, projectId, {
-    messageCount: config.automation.restorationMessageCount,
-    tokenBudget: config.automation.restorationTokenBudget
-  });
-  recordClear();
-  console.log("");
-  console.log(`${ANSI.cyan}=== Restoration Context ===${ANSI.reset}`);
-  console.log(formatRestorationContext(restoration));
-  console.log(`${ANSI.cyan}===========================${ANSI.reset}`);
-  console.log("");
-  console.log(`${ANSI.dim}Context saved and ready for clear. Use /clear to proceed.${ANSI.reset}`);
 }
-async function handlePreCompact() {
+async function handlePostTool() {
   const stdin = await readStdin();
   const config = loadConfig();
+  if (!stdin?.transcript_path)
+    return;
+  if (config.autosave.contextStep.enabled) {
+    const currentPercent = getContextPercent(stdin);
+    if (shouldAutoSave(currentPercent, stdin.transcript_path)) {
+      await performAutosave(stdin, "context step");
+    }
+  }
+}
+async function performAutosave(stdin, trigger) {
+  if (!stdin.transcript_path)
+    return;
+  const db = await initDb();
+  const projectId = stdin.cwd ? getProjectId(stdin.cwd) : null;
+  const contextPercent = getContextPercent(stdin);
+  const result = await archiveSession(db, stdin.transcript_path, projectId);
+  if (result.archived > 0) {
+    markAutoSaved(stdin.transcript_path, contextPercent, result.archived);
+    recordSavePoint(contextPercent, result.archived);
+    debugLog("autosave", `Saved ${result.archived} fragments`, { trigger, contextPercent });
+  } else {
+    markAutoSaved(stdin.transcript_path, contextPercent, 0);
+  }
+}
+async function handlePreCompact() {
+  debugLog("handlePreCompact", "Hook invoked");
+  const stdin = await readStdin();
+  debugLog("handlePreCompact", "Stdin received", { hasStdin: !!stdin, cwd: stdin?.cwd, transcriptPath: stdin?.transcript_path });
+  const config = loadConfig();
   resetAutoSaveState();
-  if (!config.archive.autoOnCompact) {
+  if (!config.autosave.onPreCompact) {
+    debugLog("handlePreCompact", "Disabled by config");
     return;
   }
   if (!stdin?.transcript_path) {
-    console.log("[Cortex] No transcript available for archiving");
+    debugLog("handlePreCompact", "No transcript path - aborting");
+    console.log(`${ANSI.brick}\u03A8${ANSI.reset} No transcript available for archiving`);
     return;
   }
   const db = await initDb();
   const projectId = config.archive.projectScope && stdin.cwd ? getProjectId(stdin.cwd) : null;
-  console.log("[Cortex] Auto-archiving before compact...");
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} Auto-archiving before compact...`);
   const result = await archiveSession(db, stdin.transcript_path, projectId, {
     onProgress: (current, total) => {
-      process.stdout.write(`\r[Cortex] Embedding ${current}/${total}...`);
+      process.stdout.write(`\r${ANSI.brick}\u03A8${ANSI.reset} Embedding ${current}/${total}...`);
     }
   });
   console.log("");
-  console.log(`[Cortex] Archived ${result.archived} fragments (${result.duplicates} duplicates skipped)`);
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} Archived ${result.archived} fragments (${result.duplicates} duplicates skipped)`);
+  const restoration = await buildRestorationContext(db, projectId, {
+    messageCount: config.restoration.messageCount,
+    tokenBudget: config.restoration.tokenBudget
+  });
+  if (restoration.hasContent) {
+    console.log("");
+    console.log(`${ANSI.cyan}=== Restoration Context ===${ANSI.reset}`);
+    console.log(formatRestorationContext(restoration));
+    console.log(`${ANSI.cyan}===========================${ANSI.reset}`);
+  }
 }
 async function handleSave(args) {
   const stdin = await readStdin();
@@ -8939,10 +8913,10 @@ async function handleSave(args) {
   }
   const db = await initDb();
   const projectId = forceGlobal ? null : config.archive.projectScope && stdin?.cwd ? getProjectId(stdin.cwd) : null;
-  console.log(`[Cortex] Archiving session${projectId ? ` to ${projectId}` : " (global)"}...`);
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} Archiving session${projectId ? ` to ${projectId}` : " (global)"}...`);
   const result = await archiveSession(db, transcriptPath, projectId, {
     onProgress: (current, total) => {
-      process.stdout.write(`\r[Cortex] Processing ${current}/${total}...`);
+      process.stdout.write(`\r${ANSI.brick}\u03A8${ANSI.reset} Processing ${current}/${total}...`);
     }
   });
   console.log("");
@@ -8966,7 +8940,7 @@ async function handleRecall(args) {
   }
   const db = await initDb();
   const projectId = stdin?.cwd ? getProjectId(stdin.cwd) : null;
-  console.log(`[Cortex] Searching${includeAll ? " all projects" : projectId ? ` in ${projectId}` : ""}...`);
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} Searching${includeAll ? " all projects" : projectId ? ` in ${projectId}` : ""}...`);
   const results = await hybridSearch(db, query, {
     projectScope: !includeAll,
     projectId: projectId || void 0,
@@ -9008,7 +8982,7 @@ async function handleStats() {
   console.log(lines.join("\n"));
 }
 async function handleSetup() {
-  console.log("[Cortex] Setting up Cortex...");
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} Setting up Cortex...`);
   ensureDataDir();
   console.log(`  \u2713 Data directory: ${getDataDir()}`);
   const db = await initDb();
@@ -9075,7 +9049,7 @@ async function handleSetup() {
     console.log("  \u2713 Session registered");
   }
   console.log("");
-  console.log("[Cortex] Setup complete!");
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} Setup complete!`);
   console.log("");
   console.log(`${ANSI.yellow}Important: Restart Claude Code to activate the statusline${ANSI.reset}`);
   console.log("");
@@ -9089,23 +9063,23 @@ async function handleConfigure(args) {
   const preset = args[0];
   if (preset && ["full", "essential", "minimal"].includes(preset)) {
     const config = applyPreset(preset);
-    console.log(`[Cortex] Applied "${preset}" preset`);
+    console.log(`${ANSI.brick}\u03A8${ANSI.reset} Applied "${preset}" preset`);
     console.log("");
     console.log("Configuration:");
     console.log(`  Statusline: ${config.statusline.enabled ? "enabled" : "disabled"}`);
-    console.log(`  Auto-archive: ${config.archive.autoOnCompact ? "enabled" : "disabled"}`);
-    console.log(`  Context warning: ${config.statusline.contextWarningThreshold}%`);
+    console.log(`  Auto-archive (PreCompact): ${config.autosave.onPreCompact ? "enabled" : "disabled"}`);
+    console.log(`  Auto-save (Context Step): ${config.autosave.contextStep.enabled ? config.autosave.contextStep.step + "%" : "disabled"}`);
     return;
   }
   console.log("Usage: cortex configure <preset>");
   console.log("");
   console.log("Presets:");
-  console.log("  full      - All features enabled (statusline, auto-archive, warnings)");
+  console.log("  full      - All features enabled (statusline, auto-archive, auto-save)");
   console.log("  essential - Statusline + auto-archive only");
   console.log("  minimal   - Commands only (no hooks/statusline)");
 }
 async function handleTestEmbed(text) {
-  console.log(`[Cortex] Testing embedding for: "${text}"`);
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} Testing embedding for: "${text}"`);
   const result = await verifyModel();
   if (result.success) {
     console.log(`  Model: ${result.model}`);
@@ -9116,7 +9090,7 @@ async function handleTestEmbed(text) {
   }
 }
 async function handleCheckDb() {
-  console.log("[Cortex] Database Integrity Check");
+  console.log(`${ANSI.brick}\u03A8${ANSI.reset} Database Integrity Check`);
   console.log("================================");
   let hasErrors = false;
   try {
@@ -9194,16 +9168,18 @@ async function handleCheckDb() {
 main();
 export {
   handleCheckDb,
-  handleClearReminder,
   handleConfigure,
-  handleContextCheck,
-  handleMonitor,
+  handlePostTool,
   handlePreCompact,
   handleRecall,
   handleSave,
+  handleSessionEnd,
   handleSessionStart,
   handleSetup,
-  handleSmartCompact,
   handleStats,
-  handleStatusline
+  handleStatusline,
+  loadAutoSaveState,
+  markAutoSaved,
+  resetAutoSaveState,
+  shouldAutoSave
 };

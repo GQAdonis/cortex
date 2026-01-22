@@ -1,5 +1,5 @@
 {
-  "description": "Cortex memory hooks for context monitoring and session management",
+  "description": "Cortex memory hooks for automatic persistence",
   "hooks": {
     "SessionStart": [
       {
@@ -12,14 +12,13 @@
         ]
       }
     ],
-    "PostToolUse": [
+    "SessionEnd": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/index.js clear-reminder",
-            "timeout": 2
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/index.js session-end",
+            "timeout": 30
           }
         ]
       }
@@ -29,8 +28,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/index.js smart-compact",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/index.js pre-compact",
             "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/index.js post-tool",
+            "timeout": 2
           }
         ]
       }

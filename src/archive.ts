@@ -505,7 +505,7 @@ export async function archiveSession(
 
   // Log parse stats if there were errors
   if (parseStats.parseErrors > 0) {
-    console.error(`[Cortex] Warning: ${parseStats.parseErrors} lines failed to parse in transcript`);
+    console.error(`Warning: ${parseStats.parseErrors} lines failed to parse in transcript`);
   }
 
   // Extract and filter content from BOTH user and assistant messages
@@ -599,7 +599,7 @@ export async function archiveSession(
   }
 
   // Also save raw turns for precise restoration after /clear
-  const turnCount = config.automation.restorationTurnCount * 2; // * 2 for user+assistant pairs
+  const turnCount = config.restoration.turnCount * 2; // * 2 for user+assistant pairs
   await saveSessionTurns(db, transcriptPath, projectId, turnCount);
 
   // Extract and save session summary (LLM-free pattern matching)
@@ -717,8 +717,8 @@ export async function buildRestorationContext(
   const config = loadConfig();
   const {
     messageCount = 5,
-    tokenBudget = config.automation.restorationTokenBudget,
-    turnCount = config.automation.restorationTurnCount * 2  // * 2 for user+assistant pairs
+    tokenBudget = config.restoration.tokenBudget,
+    turnCount = config.restoration.turnCount * 2  // * 2 for user+assistant pairs
   } = options;
 
   const tokensPerChar = 0.25; // Rough estimate

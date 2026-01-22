@@ -6475,6 +6475,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 function getDataDir() {
+  if (process.env.CORTEX_DATA_DIR) {
+    return process.env.CORTEX_DATA_DIR;
+  }
   const home = os.homedir();
   return path.join(home, ".cortex");
 }
@@ -6524,9 +6527,9 @@ function loadConfig() {
     const result = ConfigSchema.safeParse(merged);
     if (!result.success) {
       const errors = result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`);
-      console.error(`[Cortex] Config validation errors:
+      console.error(`Config validation errors:
   ${errors.join("\n  ")}`);
-      console.error("[Cortex] Using default configuration");
+      console.error("Using default configuration");
       return DEFAULT_CONFIG;
     }
     return result.data;
@@ -6553,13 +6556,28 @@ function loadSessions() {
   }
 }
 function getCurrentSession(projectId) {
-  if (!projectId) {
-    return null;
-  }
   const sessions = loadSessions();
-  return sessions[projectId] || null;
+  if (projectId && sessions[projectId]) {
+    return sessions[projectId];
+  }
+  return sessions[GLOBAL_SESSION_KEY] || null;
 }
-var StatuslineConfigSchema, ArchiveConfigSchema, MonitorConfigSchema, AutomationConfigSchema, SetupConfigSchema, ConfigSchema, DEFAULT_STATUSLINE_CONFIG, DEFAULT_ARCHIVE_CONFIG, DEFAULT_MONITOR_CONFIG, DEFAULT_AUTOMATION_CONFIG, DEFAULT_SETUP_CONFIG, DEFAULT_CONFIG;
+function getMostRecentSession() {
+  const sessions = loadSessions();
+  let mostRecent = null;
+  let mostRecentTime = 0;
+  for (const [key, session] of Object.entries(sessions)) {
+    if (key === GLOBAL_SESSION_KEY)
+      continue;
+    const savedTime = new Date(session.savedAt).getTime();
+    if (savedTime > mostRecentTime) {
+      mostRecentTime = savedTime;
+      mostRecent = session;
+    }
+  }
+  return mostRecent;
+}
+var StatuslineConfigSchema, ArchiveConfigSchema, AutosaveConfigSchema, RestorationConfigSchema, SetupConfigSchema, ConfigSchema, DEFAULT_STATUSLINE_CONFIG, DEFAULT_ARCHIVE_CONFIG, DEFAULT_AUTOSAVE_CONFIG, DEFAULT_RESTORATION_CONFIG, DEFAULT_SETUP_CONFIG, DEFAULT_CONFIG, GLOBAL_SESSION_KEY;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -6568,24 +6586,24 @@ var init_config = __esm({
       enabled: external_exports.boolean(),
       showFragments: external_exports.boolean(),
       showLastArchive: external_exports.boolean(),
-      showContext: external_exports.boolean(),
-      contextWarningThreshold: external_exports.number().min(0).max(100)
+      showContext: external_exports.boolean()
     });
     ArchiveConfigSchema = external_exports.object({
-      autoOnCompact: external_exports.boolean(),
       projectScope: external_exports.boolean(),
       minContentLength: external_exports.number().min(0).max(1e4)
     });
-    MonitorConfigSchema = external_exports.object({
-      tokenThreshold: external_exports.number().min(0).max(100)
+    AutosaveConfigSchema = external_exports.object({
+      onSessionEnd: external_exports.boolean(),
+      onPreCompact: external_exports.boolean(),
+      contextStep: external_exports.object({
+        enabled: external_exports.boolean(),
+        step: external_exports.number().min(1).max(100)
+      })
     });
-    AutomationConfigSchema = external_exports.object({
-      autoSaveThreshold: external_exports.number().min(0).max(100),
-      autoClearThreshold: external_exports.number().min(0).max(100),
-      autoClearEnabled: external_exports.boolean(),
-      restorationTokenBudget: external_exports.number().min(0).max(5e4),
-      restorationMessageCount: external_exports.number().min(0).max(50),
-      restorationTurnCount: external_exports.number().min(0).max(50)
+    RestorationConfigSchema = external_exports.object({
+      tokenBudget: external_exports.number().min(0).max(5e4),
+      messageCount: external_exports.number().min(0).max(50),
+      turnCount: external_exports.number().min(0).max(50)
     });
     SetupConfigSchema = external_exports.object({
       completed: external_exports.boolean(),
@@ -6594,33 +6612,33 @@ var init_config = __esm({
     ConfigSchema = external_exports.object({
       statusline: StatuslineConfigSchema,
       archive: ArchiveConfigSchema,
-      monitor: MonitorConfigSchema,
-      automation: AutomationConfigSchema,
+      autosave: AutosaveConfigSchema,
+      restoration: RestorationConfigSchema,
       setup: SetupConfigSchema
     });
     DEFAULT_STATUSLINE_CONFIG = {
       enabled: true,
       showFragments: true,
       showLastArchive: true,
-      showContext: true,
-      contextWarningThreshold: 60
+      showContext: true
     };
     DEFAULT_ARCHIVE_CONFIG = {
-      autoOnCompact: true,
       projectScope: true,
       minContentLength: 50
     };
-    DEFAULT_MONITOR_CONFIG = {
-      tokenThreshold: 70
+    DEFAULT_AUTOSAVE_CONFIG = {
+      onSessionEnd: true,
+      onPreCompact: true,
+      contextStep: {
+        enabled: true,
+        step: 5
+        // Save every 5% increase in context
+      }
     };
-    DEFAULT_AUTOMATION_CONFIG = {
-      autoSaveThreshold: 80,
-      autoClearThreshold: 80,
-      autoClearEnabled: false,
-      restorationTokenBudget: 2e3,
-      restorationMessageCount: 5,
-      restorationTurnCount: 3
-      // Last 3 turns (user+assistant pairs) for precise restoration
+    DEFAULT_RESTORATION_CONFIG = {
+      tokenBudget: 2e3,
+      messageCount: 5,
+      turnCount: 3
     };
     DEFAULT_SETUP_CONFIG = {
       completed: false,
@@ -6629,10 +6647,11 @@ var init_config = __esm({
     DEFAULT_CONFIG = {
       statusline: DEFAULT_STATUSLINE_CONFIG,
       archive: DEFAULT_ARCHIVE_CONFIG,
-      monitor: DEFAULT_MONITOR_CONFIG,
-      automation: DEFAULT_AUTOMATION_CONFIG,
+      autosave: DEFAULT_AUTOSAVE_CONFIG,
+      restoration: DEFAULT_RESTORATION_CONFIG,
       setup: DEFAULT_SETUP_CONFIG
     };
+    GLOBAL_SESSION_KEY = "_global";
   }
 });
 
@@ -7789,7 +7808,7 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
     return result;
   }
   if (parseStats.parseErrors > 0) {
-    console.error(`[Cortex] Warning: ${parseStats.parseErrors} lines failed to parse in transcript`);
+    console.error(`Warning: ${parseStats.parseErrors} lines failed to parse in transcript`);
   }
   const contentToArchive = [];
   for (const message of messages) {
@@ -7851,7 +7870,7 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
       result.archived++;
     }
   }
-  const turnCount = config.automation.restorationTurnCount * 2;
+  const turnCount = config.restoration.turnCount * 2;
   await saveSessionTurns(db, transcriptPath, projectId, turnCount);
   const insights = extractSessionInsights(messages);
   if (insights.summary || insights.decisions.length > 0 || insights.outcomes.length > 0) {
@@ -8153,20 +8172,25 @@ async function handleSave(db, params) {
   let { transcriptPath, projectId } = params;
   const { global = false } = params;
   if (!transcriptPath) {
-    if (!projectId) {
+    if (projectId) {
+      const currentSession = getCurrentSession(projectId);
+      if (currentSession) {
+        transcriptPath = currentSession.transcriptPath;
+      }
+    }
+    if (!transcriptPath) {
+      const recentSession = getMostRecentSession();
+      if (recentSession) {
+        transcriptPath = recentSession.transcriptPath;
+        projectId = projectId || recentSession.projectId;
+      }
+    }
+    if (!transcriptPath) {
       return {
         success: false,
-        error: "Either transcriptPath or projectId must be provided to archive session."
+        error: "No active session found. Start a new Claude Code session first."
       };
     }
-    const currentSession = getCurrentSession(projectId);
-    if (!currentSession) {
-      return {
-        success: false,
-        error: `No active session found for project: ${projectId}. Session must be started first.`
-      };
-    }
-    transcriptPath = currentSession.transcriptPath;
   }
   const effectiveProjectId = global ? null : projectId || null;
   const result = await archiveSession(db, transcriptPath, effectiveProjectId);

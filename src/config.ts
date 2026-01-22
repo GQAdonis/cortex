@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { z } from 'zod';
-import type { Config, StatuslineConfig, ArchiveConfig, MonitorConfig, AutomationConfig, SetupConfig } from './types.js';
+import type { Config, StatuslineConfig, ArchiveConfig, AutosaveConfig, RestorationConfig, SetupConfig } from './types.js';
 
 // ============================================================================
 // Zod Schemas for Config Validation
@@ -18,26 +18,26 @@ const StatuslineConfigSchema = z.object({
   showFragments: z.boolean(),
   showLastArchive: z.boolean(),
   showContext: z.boolean(),
-  contextWarningThreshold: z.number().min(0).max(100),
 });
 
 const ArchiveConfigSchema = z.object({
-  autoOnCompact: z.boolean(),
   projectScope: z.boolean(),
   minContentLength: z.number().min(0).max(10000),
 });
 
-const MonitorConfigSchema = z.object({
-  tokenThreshold: z.number().min(0).max(100),
+const AutosaveConfigSchema = z.object({
+  onSessionEnd: z.boolean(),
+  onPreCompact: z.boolean(),
+  contextStep: z.object({
+    enabled: z.boolean(),
+    step: z.number().min(1).max(100),
+  }),
 });
 
-const AutomationConfigSchema = z.object({
-  autoSaveThreshold: z.number().min(0).max(100),
-  autoClearThreshold: z.number().min(0).max(100),
-  autoClearEnabled: z.boolean(),
-  restorationTokenBudget: z.number().min(0).max(50000),
-  restorationMessageCount: z.number().min(0).max(50),
-  restorationTurnCount: z.number().min(0).max(50),
+const RestorationConfigSchema = z.object({
+  tokenBudget: z.number().min(0).max(50000),
+  messageCount: z.number().min(0).max(50),
+  turnCount: z.number().min(0).max(50),
 });
 
 const SetupConfigSchema = z.object({
@@ -48,8 +48,8 @@ const SetupConfigSchema = z.object({
 const ConfigSchema = z.object({
   statusline: StatuslineConfigSchema,
   archive: ArchiveConfigSchema,
-  monitor: MonitorConfigSchema,
-  automation: AutomationConfigSchema,
+  autosave: AutosaveConfigSchema,
+  restoration: RestorationConfigSchema,
   setup: SetupConfigSchema,
 });
 
@@ -62,26 +62,26 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
   showFragments: true,
   showLastArchive: true,
   showContext: true,
-  contextWarningThreshold: 60,
 };
 
 export const DEFAULT_ARCHIVE_CONFIG: ArchiveConfig = {
-  autoOnCompact: true,
   projectScope: true,
   minContentLength: 50,
 };
 
-export const DEFAULT_MONITOR_CONFIG: MonitorConfig = {
-  tokenThreshold: 70,
+export const DEFAULT_AUTOSAVE_CONFIG: AutosaveConfig = {
+  onSessionEnd: true,
+  onPreCompact: true,
+  contextStep: {
+    enabled: true,
+    step: 5,  // Save every 5% increase in context
+  },
 };
 
-export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
-  autoSaveThreshold: 80,
-  autoClearThreshold: 80,
-  autoClearEnabled: false,
-  restorationTokenBudget: 2000,
-  restorationMessageCount: 5,
-  restorationTurnCount: 3,  // Last 3 turns (user+assistant pairs) for precise restoration
+export const DEFAULT_RESTORATION_CONFIG: RestorationConfig = {
+  tokenBudget: 2000,
+  messageCount: 5,
+  turnCount: 3,
 };
 
 export const DEFAULT_SETUP_CONFIG: SetupConfig = {
@@ -92,8 +92,8 @@ export const DEFAULT_SETUP_CONFIG: SetupConfig = {
 export const DEFAULT_CONFIG: Config = {
   statusline: DEFAULT_STATUSLINE_CONFIG,
   archive: DEFAULT_ARCHIVE_CONFIG,
-  monitor: DEFAULT_MONITOR_CONFIG,
-  automation: DEFAULT_AUTOMATION_CONFIG,
+  autosave: DEFAULT_AUTOSAVE_CONFIG,
+  restoration: DEFAULT_RESTORATION_CONFIG,
   setup: DEFAULT_SETUP_CONFIG,
 };
 
@@ -105,6 +105,9 @@ export const DEFAULT_CONFIG: Config = {
  * Get the Cortex data directory path
  */
 export function getDataDir(): string {
+  if (process.env.CORTEX_DATA_DIR) {
+    return process.env.CORTEX_DATA_DIR;
+  }
   const home = os.homedir();
   return path.join(home, '.cortex');
 }
@@ -202,8 +205,8 @@ export function loadConfig(): Config {
     if (!result.success) {
       // Log validation errors but continue with defaults
       const errors = result.error.errors.map(e => `${e.path.join('.')}: ${e.message}`);
-      console.error(`[Cortex] Config validation errors:\n  ${errors.join('\n  ')}`);
-      console.error('[Cortex] Using default configuration');
+      console.error(`Config validation errors:\n  ${errors.join('\n  ')}`);
+      console.error('Using default configuration');
       return DEFAULT_CONFIG;
     }
 
@@ -268,23 +271,23 @@ export const CONFIG_PRESETS: Record<ConfigPreset, Partial<Config>> = {
       showFragments: true,
       showLastArchive: true,
       showContext: true,
-      contextWarningThreshold: 70,
     },
     archive: {
-      autoOnCompact: true,
       projectScope: true,
       minContentLength: 50,
     },
-    monitor: {
-      tokenThreshold: 70,
+    autosave: {
+      onSessionEnd: true,
+      onPreCompact: true,
+      contextStep: {
+        enabled: true,
+        step: 5,
+      },
     },
-    automation: {
-      autoSaveThreshold: 70,
-      autoClearThreshold: 80,
-      autoClearEnabled: false,
-      restorationTokenBudget: 2000,
-      restorationMessageCount: 5,
-      restorationTurnCount: 3,
+    restoration: {
+      tokenBudget: 3000,
+      messageCount: 5,
+      turnCount: 5,
     },
   },
   essential: {
@@ -293,23 +296,23 @@ export const CONFIG_PRESETS: Record<ConfigPreset, Partial<Config>> = {
       showFragments: true,
       showLastArchive: false,
       showContext: true,
-      contextWarningThreshold: 80,
     },
     archive: {
-      autoOnCompact: true,
       projectScope: true,
       minContentLength: 100,
     },
-    monitor: {
-      tokenThreshold: 80,
+    autosave: {
+      onSessionEnd: true,
+      onPreCompact: true,
+      contextStep: {
+        enabled: true,
+        step: 10,
+      },
     },
-    automation: {
-      autoSaveThreshold: 75,
-      autoClearThreshold: 85,
-      autoClearEnabled: false,
-      restorationTokenBudget: 1500,
-      restorationMessageCount: 5,
-      restorationTurnCount: 3,
+    restoration: {
+      tokenBudget: 1500,
+      messageCount: 5,
+      turnCount: 3,
     },
   },
   minimal: {
@@ -318,23 +321,23 @@ export const CONFIG_PRESETS: Record<ConfigPreset, Partial<Config>> = {
       showFragments: false,
       showLastArchive: false,
       showContext: false,
-      contextWarningThreshold: 90,
     },
     archive: {
-      autoOnCompact: false,
       projectScope: true,
       minContentLength: 50,
     },
-    monitor: {
-      tokenThreshold: 90,
+    autosave: {
+      onSessionEnd: true,
+      onPreCompact: true,
+      contextStep: {
+        enabled: false,
+        step: 20,
+      },
     },
-    automation: {
-      autoSaveThreshold: 85,
-      autoClearThreshold: 90,
-      autoClearEnabled: false,
-      restorationTokenBudget: 1000,
-      restorationMessageCount: 3,
-      restorationTurnCount: 2,
+    restoration: {
+      tokenBudget: 1000,
+      messageCount: 3,
+      turnCount: 2,
     },
   },
 };
@@ -401,19 +404,20 @@ function saveSessions(sessions: SessionsStore): void {
   atomicWriteFileSync(getSessionsPath(), JSON.stringify(sessions, null, 2));
 }
 
+// Fallback key for sessions without a project
+const GLOBAL_SESSION_KEY = '_global';
+
 /**
  * Save current session info (transcript path, project)
  * Keyed by projectId so multiple instances don't conflict
+ * Uses '_global' fallback when no projectId is available
  */
 export function saveCurrentSession(transcriptPath: string, projectId: string | null): void {
-  if (!projectId) {
-    // Can't store without a projectId key
-    return;
-  }
+  const key = projectId || GLOBAL_SESSION_KEY;
   const sessions = loadSessions();
-  sessions[projectId] = {
+  sessions[key] = {
     transcriptPath,
-    projectId,
+    projectId: projectId || GLOBAL_SESSION_KEY,
     savedAt: new Date().toISOString(),
   };
   saveSessions(sessions);
@@ -421,13 +425,40 @@ export function saveCurrentSession(transcriptPath: string, projectId: string | n
 
 /**
  * Get session info for a specific project
+ * Falls back to '_global' session when no projectId is provided
  */
 export function getCurrentSession(projectId?: string): { transcriptPath: string; projectId: string } | null {
-  if (!projectId) {
-    return null;
-  }
   const sessions = loadSessions();
-  return sessions[projectId] || null;
+
+  // Try specific project first, then fall back to global
+  if (projectId && sessions[projectId]) {
+    return sessions[projectId];
+  }
+
+  // Fall back to global session
+  return sessions[GLOBAL_SESSION_KEY] || null;
+}
+
+/**
+ * Get the most recently saved session (by savedAt timestamp)
+ * Used when no projectId is provided to auto-detect current session
+ */
+export function getMostRecentSession(): { transcriptPath: string; projectId: string; savedAt: string } | null {
+  const sessions = loadSessions();
+
+  let mostRecent: { transcriptPath: string; projectId: string; savedAt: string } | null = null;
+  let mostRecentTime = 0;
+
+  for (const [key, session] of Object.entries(sessions)) {
+    if (key === GLOBAL_SESSION_KEY) continue; // Skip global fallback
+    const savedTime = new Date(session.savedAt).getTime();
+    if (savedTime > mostRecentTime) {
+      mostRecentTime = savedTime;
+      mostRecent = session;
+    }
+  }
+
+  return mostRecent;
 }
 
 /**
@@ -454,21 +485,17 @@ export function isSetupComplete(): boolean {
 // ============================================================================
 
 interface AutoSaveState {
-  lastAutoSaveTimestamp: string | null;
-  lastAutoSaveContext: number;
-  transcriptPath: string | null;
-  hasSavedThisSession: boolean;
-  hasReachedWarningThreshold: boolean;
-  warningContextPercent: number;
+  lastSaveTimestamp: number;      // Unix ms
+  lastSaveContext: number;        // Context % at last save
+  lastSaveFragments: number;      // Number of fragments saved
+  transcriptPath: string | null;  // Current session
 }
 
 const DEFAULT_AUTO_SAVE_STATE: AutoSaveState = {
-  lastAutoSaveTimestamp: null,
-  lastAutoSaveContext: 0,
+  lastSaveTimestamp: 0,
+  lastSaveContext: 0,
+  lastSaveFragments: 0,
   transcriptPath: null,
-  hasSavedThisSession: false,
-  hasReachedWarningThreshold: false,
-  warningContextPercent: 0,
 };
 
 /**
@@ -503,46 +530,64 @@ export function saveAutoSaveState(state: AutoSaveState): void {
 }
 
 /**
- * Check if we should trigger auto-save
- * Returns true if:
- * - Context is above threshold
- * - Haven't already saved this session
- * - OR transcript path changed (new session)
+ * Get last save timestamp (Unix ms)
  */
-export function shouldAutoSave(currentContext: number, transcriptPath: string | null, threshold: number): boolean {
-  if (currentContext < threshold) {
-    return false;
-  }
-
+export function getLastSaveTimestamp(): number {
   const state = loadAutoSaveState();
-
-  // New transcript = new session, allow save
-  if (transcriptPath && state.transcriptPath !== transcriptPath) {
-    return true;
-  }
-
-  // Already saved this session
-  if (state.hasSavedThisSession) {
-    return false;
-  }
-
-  return true;
+  return state.lastSaveTimestamp;
 }
 
 /**
- * Mark that we've auto-saved for this session
+ * Get last save context percentage
  */
-export function markAutoSaved(transcriptPath: string | null, contextPercent: number): void {
-  const currentState = loadAutoSaveState();
+export function getLastSaveContext(): number {
+  const state = loadAutoSaveState();
+  return state.lastSaveContext;
+}
+
+/**
+ * Check if should auto-save based on context step
+ */
+export function shouldAutoSave(currentContext: number, transcriptPath: string | null): boolean {
+  if (!transcriptPath) return false;
+
+  const state = loadAutoSaveState();
+  const config = loadConfig();
+
+  // New session -> reset state implicitly by not matching path
+  if (state.transcriptPath !== transcriptPath) {
+    // If context is already high enough to trigger first step
+    return currentContext >= config.autosave.contextStep.step;
+  }
+
+  // Check if we've crossed the next step threshold
+  // E.g. last 10%, current 16%, step 5% -> diff 6% -> save
+  const diff = currentContext - state.lastSaveContext;
+  return diff >= config.autosave.contextStep.step;
+}
+
+/**
+ * Mark that we've auto-saved
+ */
+export function markAutoSaved(transcriptPath: string | null, contextPercent: number, fragments: number): void {
   const state: AutoSaveState = {
-    lastAutoSaveTimestamp: new Date().toISOString(),
-    lastAutoSaveContext: contextPercent,
+    lastSaveTimestamp: Date.now(),
+    lastSaveContext: contextPercent,
+    lastSaveFragments: fragments,
     transcriptPath,
-    hasSavedThisSession: true,
-    hasReachedWarningThreshold: currentState.hasReachedWarningThreshold,
-    warningContextPercent: currentState.warningContextPercent,
   };
   saveAutoSaveState(state);
+}
+
+/**
+ * Check if we saved recently (for statusline indicator)
+ */
+export function wasRecentlySaved(windowMs: number = 5000): boolean {
+  const state = loadAutoSaveState();
+  if (state.lastSaveTimestamp === 0) return false;
+
+  const elapsed = Date.now() - state.lastSaveTimestamp;
+  return elapsed < windowMs;
 }
 
 /**
@@ -553,11 +598,10 @@ export function resetAutoSaveState(): void {
 }
 
 /**
- * Mark that context has reached warning threshold
+ * Check if auto-save state is for current session
  */
-export function markWarningThresholdReached(contextPercent: number): void {
+export function isAutoSaveStateCurrentSession(transcriptPath: string | null): boolean {
+  if (!transcriptPath) return false;
   const state = loadAutoSaveState();
-  state.hasReachedWarningThreshold = true;
-  state.warningContextPercent = contextPercent;
-  saveAutoSaveState(state);
+  return state.transcriptPath === transcriptPath;
 }

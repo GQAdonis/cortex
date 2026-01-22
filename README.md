@@ -9,7 +9,7 @@
 **Persistent local memory for Claude Code.** Longer sessions. Cross-session recall. Zero cloud.
 
 ```
-∿∿ 47 ●●○○○ 45%
+Ψ 47 ●●○○○ 45%
 ✓ Autosaved ⚠ Run /clear
 ```
 
@@ -77,12 +77,12 @@ Done! Restart Claude Code to activate the statusline.
 The statusline is configured automatically by `/cortex-setup`. Restart Claude Code after setup to see it.
 
 ```
-∿∿ 47 ●●○○○ 45%
+Ψ 47 ●●○○○ 45%
 ✓ Autosaved ⚠ Run /clear
 ```
 
 **Line 1:**
-- `∿∿` — Cortex identifier
+- `Ψ` — Cortex identifier
 - `47` — Memory fragment count for current project
 - `●●○○○` — Context usage (filled/empty circles, color-coded)
 - `45%` — Context percentage

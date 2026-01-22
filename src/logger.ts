@@ -28,7 +28,7 @@ export interface LoggerOptions {
 
 let globalVerbose = false;
 let globalJsonOutput = false;
-let globalPrefix = '[Cortex]';
+let globalPrefix = '\x1b[38;2;217;119;87mΨ\x1b[0m';
 
 /**
  * Configure global logger settings

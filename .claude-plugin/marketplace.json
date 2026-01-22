@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Persistent local memory for Claude Code. Cross-session recall with vector search, automatic archiving, zero cloud dependencies.",
-    "version": "2.0.0"
+    "version": "2.0.2"
   },
   "plugins": [
     {
@@ -14,7 +14,14 @@
       "source": "./",
       "description": "Persistent local memory for Claude Code. Longer sessions, cross-session recall, zero cloud.",
       "category": "memory",
-      "tags": ["memory", "context", "vector-search", "embeddings", "local-first", "cross-session"]
+      "tags": [
+        "memory",
+        "context",
+        "vector-search",
+        "embeddings",
+        "local-first",
+        "cross-session"
+      ]
     }
   ]
 }

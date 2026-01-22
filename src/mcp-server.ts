@@ -5,7 +5,7 @@
 
 import * as readline from 'readline';
 import { initDb, getStats, getProjectStats, getMemory, deleteMemory, storeManualMemory, saveDb, searchByVector, searchByKeyword } from './database.js';
-import { loadConfig, getDataDir, getCurrentSession } from './config.js';
+import { loadConfig, getDataDir, getCurrentSession, getMostRecentSession } from './config.js';
 import { hybridSearch } from './search.js';
 import { archiveSession } from './archive.js';
 import { embedQuery } from './embeddings.js';
@@ -305,22 +305,32 @@ async function handleSave(
   let { transcriptPath, projectId } = params;
   const { global = false } = params;
 
-  // If transcriptPath not provided, look up by projectId
+  // If transcriptPath not provided, try to auto-detect
   if (!transcriptPath) {
-    if (!projectId) {
+    // Try by projectId first
+    if (projectId) {
+      const currentSession = getCurrentSession(projectId);
+      if (currentSession) {
+        transcriptPath = currentSession.transcriptPath;
+      }
+    }
+
+    // If still no transcript, try most recent session
+    if (!transcriptPath) {
+      const recentSession = getMostRecentSession();
+      if (recentSession) {
+        transcriptPath = recentSession.transcriptPath;
+        projectId = projectId || recentSession.projectId;
+      }
+    }
+
+    // If still nothing, error
+    if (!transcriptPath) {
       return {
         success: false,
-        error: 'Either transcriptPath or projectId must be provided to archive session.',
+        error: 'No active session found. Start a new Claude Code session first.',
       };
     }
-    const currentSession = getCurrentSession(projectId);
-    if (!currentSession) {
-      return {
-        success: false,
-        error: `No active session found for project: ${projectId}. Session must be started first.`,
-      };
-    }
-    transcriptPath = currentSession.transcriptPath;
   }
 
   const effectiveProjectId = global ? null : projectId || null;
