@@ -18,6 +18,5 @@
     "embeddings",
     "local-first",
     "cross-session"
-  ],
-  "hooks": "./hooks/hooks.json"
+  ]
 }
