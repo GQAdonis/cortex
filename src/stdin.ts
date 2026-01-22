@@ -158,3 +158,15 @@ export function formatDuration(date: Date): string {
 
   return date.toLocaleDateString();
 }
+
+/**
+ * Format number compactly: 1.1K, 10.2K, 100.1K, 1.1M etc
+ * Below 1000, returns the number as-is
+ */
+export function formatCompactNumber(n: number): string {
+  if (n < 1_000) return String(n);
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n < 1_000_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  return `${(n / 1_000_000_000_000).toFixed(1)}T`;
+}

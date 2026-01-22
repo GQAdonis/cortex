@@ -3,8 +3,8 @@
  * Handles statusline display, CLI commands, and hook events
  */
 
-import { readStdin, getProjectId, getContextPercent, formatDuration } from './stdin.js';
-import { loadConfig, ensureDataDir, applyPreset, getDataDir, isSetupComplete, markSetupComplete, saveCurrentSession, shouldAutoSave, markAutoSaved, resetAutoSaveState, loadAutoSaveState, isAutoSaveStateCurrentSession, wasRecentlySaved, isSaving, setSavingState, type ConfigPreset } from './config.js';
+import { readStdin, getProjectId, getContextPercent, formatDuration, formatCompactNumber } from './stdin.js';
+import { loadConfig, ensureDataDir, applyPreset, getDataDir, isSetupComplete, markSetupComplete, saveCurrentSession, shouldAutoSave, markAutoSaved, resetAutoSaveState, loadAutoSaveState, isAutoSaveStateCurrentSession, wasRecentlySaved, isSaving, setSavingState, isShowingSavingIndicator, getLastSaveTimeAgo, type ConfigPreset } from './config.js';
 import { spawn } from 'child_process';
 import { initDb, getStats, getProjectStats, formatBytes, closeDb, saveDb, searchByVector, validateDatabase, isFts5Enabled, getBackupFiles } from './database.js';
 import { verifyModel, getModelName, embedQuery } from './embeddings.js';
@@ -207,7 +207,7 @@ async function handleStatusline() {
 
     // Memory count
     if (config.statusline.showFragments) {
-      parts.push(`${stats.fragmentCount}`);
+      parts.push(formatCompactNumber(stats.fragmentCount));
     }
 
     // Context usage with circle strip
@@ -216,39 +216,47 @@ async function handleStatusline() {
       parts.push(contextStrip);
     }
 
-    // Inline indicator: Saving (Animated) vs Saved
-    if (isSaving()) {
+    // Inline indicator: Saving (Animated) → Autosaved → ✓ Xm
+    if (isShowingSavingIndicator()) {
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       const frame = frames[Math.floor(Date.now() / 80) % frames.length];
       parts.push(`${ANSI.yellow}${frame} Saving${ANSI.reset}`);
     } else if (wasRecentlySaved()) {
       parts.push(`${ANSI.green}✓ Autosaved${ANSI.reset}`);
-    } else if (stdin?.transcript_path && config.autosave.contextStep.enabled) {
-      // Check triggers immediately if not saving
-      if (shouldAutoSave(contextPercent, stdin.transcript_path)) {
-        // START BACKGROUND SAVE
-        setSavingState(true, stdin.transcript_path);
+    } else {
+      // Show persistent time indicator if we have a recent save
+      const timeAgo = getLastSaveTimeAgo(stdin?.transcript_path ?? null);
+      if (timeAgo) {
+        parts.push(`${ANSI.dim}✓ ${timeAgo}${ANSI.reset}`);
+      }
 
-        const scriptPath = process.argv[1];
-        const nodePath = process.argv[0];
+      // Check if we should trigger a new save
+      if (stdin?.transcript_path && config.autosave.contextStep.enabled) {
+        if (shouldAutoSave(contextPercent, stdin.transcript_path)) {
+          // START BACKGROUND SAVE
+          setSavingState(true, stdin.transcript_path);
 
-        // Pass necessary context via args
-        const childArgs = ['background-save'];
-        if (stdin.transcript_path) childArgs.push(`--transcript=${stdin.transcript_path}`);
-        if (stdin.cwd) childArgs.push(`--cwd=${stdin.cwd}`);
-        childArgs.push(`--percent=${contextPercent}`);
+          const scriptPath = process.argv[1];
+          const nodePath = process.argv[0];
 
-        try {
-          const subprocess = spawn(nodePath, [scriptPath, ...childArgs], {
-            detached: true,
-            stdio: 'ignore',
-            env: process.env
-          });
-          subprocess.unref();
-          parts.push(`${ANSI.yellow}⠋ Saving${ANSI.reset}`);
-        } catch (e) {
-          // Fallback (show nothing or error debug)
-          setSavingState(false, null);
+          // Pass necessary context via args
+          const childArgs = ['background-save'];
+          if (stdin.transcript_path) childArgs.push(`--transcript=${stdin.transcript_path}`);
+          if (stdin.cwd) childArgs.push(`--cwd=${stdin.cwd}`);
+          childArgs.push(`--percent=${contextPercent}`);
+
+          try {
+            const subprocess = spawn(nodePath, [scriptPath, ...childArgs], {
+              detached: true,
+              stdio: 'ignore',
+              env: process.env
+            });
+            subprocess.unref();
+            // Note: "Saving" will show on next statusline refresh via isShowingSavingIndicator()
+          } catch (e) {
+            // Fallback (clear state on error)
+            setSavingState(false, null);
+          }
         }
       }
     }

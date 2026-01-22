@@ -491,6 +491,7 @@ interface AutoSaveState {
   transcriptPath: string | null;  // Current session
   isSaving: boolean;              // Is a save currently in progress?
   saveStartTime: number;          // When the current save started (for timeout/animation)
+  savingDisplayUntil: number;     // Show "Saving" indicator at least until this time (Unix ms)
 }
 
 const DEFAULT_AUTO_SAVE_STATE: AutoSaveState = {
@@ -500,6 +501,7 @@ const DEFAULT_AUTO_SAVE_STATE: AutoSaveState = {
   transcriptPath: null,
   isSaving: false,
   saveStartTime: 0,
+  savingDisplayUntil: 0,
 };
 
 /**
@@ -593,6 +595,7 @@ export function setSavingState(isSaving: boolean, transcriptPath: string | null)
   state.isSaving = isSaving;
   if (isSaving) {
     state.saveStartTime = Date.now();
+    state.savingDisplayUntil = Date.now() + 1000; // Show "Saving" for at least 1 second
     state.transcriptPath = transcriptPath; // Ensure we track which session is saving
   } else {
     state.saveStartTime = 0;
@@ -613,17 +616,68 @@ export function isSaving(): boolean {
 }
 
 /**
- * Check if we saved recently (for statusline indicator)
+ * Check if we should show the "Saving" indicator
+ * Shows while actually saving OR for minimum display time (1 second)
+ */
+export function isShowingSavingIndicator(): boolean {
+  const state = loadAutoSaveState();
+  const now = Date.now();
+
+  // Still actively saving
+  if (state.isSaving && now - state.saveStartTime < 60000) {
+    return true;
+  }
+
+  // Minimum display time hasn't elapsed yet
+  if (state.savingDisplayUntil > 0 && now < state.savingDisplayUntil) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if we saved recently (for "Autosaved" label - shows for 5 seconds)
  */
 export function wasRecentlySaved(windowMs: number = 5000): boolean {
   const state = loadAutoSaveState();
   if (state.lastSaveTimestamp === 0) return false;
 
-  // If currently saving, don't show "Autosaved" yet
-  if (state.isSaving) return false;
+  // If still showing "Saving" indicator, don't show "Autosaved" yet
+  if (isShowingSavingIndicator()) return false;
 
   const elapsed = Date.now() - state.lastSaveTimestamp;
   return elapsed < windowMs;
+}
+
+/**
+ * Get formatted time since last save (e.g., "5m", "2h")
+ * Returns null if no save has occurred in this session
+ */
+export function getLastSaveTimeAgo(transcriptPath: string | null): string | null {
+  const state = loadAutoSaveState();
+
+  // Only show for current session
+  if (!transcriptPath || state.transcriptPath !== transcriptPath) {
+    return null;
+  }
+
+  if (state.lastSaveTimestamp === 0) return null;
+
+  const elapsed = Date.now() - state.lastSaveTimestamp;
+
+  // Don't show if still in "Autosaved" window
+  if (elapsed < 5000) return null;
+
+  // Format time
+  const seconds = Math.floor(elapsed / 1000);
+  if (seconds < 60) return `${seconds}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h`;
 }
 
 /**

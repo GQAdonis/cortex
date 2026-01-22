@@ -22,6 +22,12 @@
 | Re-explaining context every session | Hybrid search recalls relevant memories |
 | Cloud memory privacy concerns | 100% local — `~/.cortex/memory.db` |
 
+## Requirements
+
+- **Node.js**: 18.0.0 or higher
+- **Disk Space**: ~500MB (Includes 150MB embedding model cache + database growth)
+- **OS**: macOS or Linux (Windows supported via WSL2)
+
 ## Install
 
 Inside a Claude Code instance:
@@ -172,12 +178,11 @@ Cortex uses a hybrid search combining three signals:
 
 ### User-Invocable Skills
 
+Skills are for multi-step workflows. Atomic operations use MCP tools directly.
+
 | Command | Purpose |
 |---------|---------|
 | `/cortex-setup` | First-time initialization wizard |
-| `/cortex-save` | Archive current session to memory |
-| `/cortex-recall <query>` | Search memories with hybrid search |
-| `/cortex-stats` | Display memory statistics |
 | `/cortex-configure <preset>` | Apply configuration preset |
 | `/cortex-manage` | Delete or manage memories |
 
@@ -221,24 +226,25 @@ cortex_save()
   "statusline": {
     "enabled": true,
     "showFragments": true,
-    "showContext": true,
-    "contextWarningThreshold": 70
+    "showLastArchive": true,
+    "showContext": true
   },
   "archive": {
-    "autoOnCompact": true,
     "projectScope": true,
     "minContentLength": 50
   },
-  "automation": {
-    "autoSaveThreshold": 70,    // Legacy (fallback)
-    "contextStep": {            // Primary Trigger
+  "autosave": {
+    "onSessionEnd": true,
+    "onPreCompact": true,
+    "contextStep": {
        "enabled": true,
        "step": 5
-    },
-    "autoClearThreshold": 80,
-    "autoClearEnabled": false,
-    "restorationTokenBudget": 1000,
-    "restorationMessageCount": 5
+    }
+  },
+  "restoration": {
+    "tokenBudget": 2000,
+    "messageCount": 5,
+    "turnCount": 3
   }
 }
 ```
@@ -255,11 +261,13 @@ cortex_save()
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `autoSaveThreshold` | 70 | Context % to trigger auto-save |
-| `autoClearThreshold` | 80 | Context % to suggest `/clear` |
-| `autoClearEnabled` | false | Auto-clear without prompting |
-| `restorationTokenBudget` | 1000 | Max tokens for restoration context |
-| `restorationMessageCount` | 5 | Recent messages to restore |
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `autosave.contextStep.step` | 5 | % context increase to trigger auto-save |
+| `autosave.onPreCompact` | true | Archive session before `/compact` or `/clear` |
+| `autosave.onSessionEnd` | true | Archive session on exit (`Ctrl+C` x2) |
+| `restoration.tokenBudget` | 2000 | Max tokens for key decision restoration |
+| `restoration.turnCount` | 3 | Number of raw conversation turns to restore |
 
 ## Database Schema
 
@@ -306,29 +314,50 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(content);
 npm test
 ```
 
-**187 tests** covering:
+> **Note**: `npm test` runs with **synthetic/fake data** for speed and isolation.
+
+### Running with Real Data (E2E)
+
+To test against a real production transcript (35MB+):
+
+1. **Locate a real transcript**:
+   Find a large `.jsonl` file in your `~/.claude/` directory.
+
+2. **Place it in tests**:
+   Copy it to `tests/sample_transcript.jsonl`.
+   ```bash
+   cp ~/.claude/your-session-id.jsonl tests/sample_transcript.jsonl
+   ```
+
+3. **Run the E2E test**:
+   ```bash
+   node --test tests/e2e_transcript.test.js
+   ```
+
+**200+ tests** covering:
 - Database CRUD, deduplication, recovery
-- Vector and keyword search
-- RRF fusion scoring
-- Archive parsing and chunking
-- MCP tool handlers
-- Configuration validation
+- Vector and keyword search (Hybrid RRF)
+- Archive parsing, chunking, and value extraction
+- MCP tool handlers and stdin processing
+- Configuration presets and validation
+- Real-world E2E transcript replay
 
 ```
 ✔ Analytics Module (14 tests)
-✔ Archive Module (10 tests)
+✔ Archive Module (35 tests)
 ✔ Config Module (5 tests)
-✔ Database Module (30+ tests)
+✔ Database Module (38 tests)
 ✔ Embeddings Module (8 tests)
 ✔ Search Module (31 tests)
-✔ Integration Tests (20+ tests)
-✔ MCP Tool Handlers (30+ tests)
+✔ Integration Tests (21 tests)
+✔ MCP Tool Handlers (5 tests)
+✔ Auto-Save Logic (10 tests)
+✔ E2E Transcript Replay (2 tests)
 
 ℹ tests 215
-ℹ suites 12
+ℹ suites 13
 ℹ pass 215
 ℹ fail 0
-ℹ duration_ms 338
 ```
 
 ## Development

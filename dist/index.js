@@ -4323,27 +4323,51 @@ function setSavingState(isSaving2, transcriptPath) {
   state.isSaving = isSaving2;
   if (isSaving2) {
     state.saveStartTime = Date.now();
+    state.savingDisplayUntil = Date.now() + 1e3;
     state.transcriptPath = transcriptPath;
   } else {
     state.saveStartTime = 0;
   }
   saveAutoSaveState(state);
 }
-function isSaving() {
+function isShowingSavingIndicator() {
   const state = loadAutoSaveState();
-  if (state.isSaving && Date.now() - state.saveStartTime > 6e4) {
-    return false;
+  const now = Date.now();
+  if (state.isSaving && now - state.saveStartTime < 6e4) {
+    return true;
   }
-  return state.isSaving;
+  if (state.savingDisplayUntil > 0 && now < state.savingDisplayUntil) {
+    return true;
+  }
+  return false;
 }
 function wasRecentlySaved(windowMs = 5e3) {
   const state = loadAutoSaveState();
   if (state.lastSaveTimestamp === 0)
     return false;
-  if (state.isSaving)
+  if (isShowingSavingIndicator())
     return false;
   const elapsed = Date.now() - state.lastSaveTimestamp;
   return elapsed < windowMs;
+}
+function getLastSaveTimeAgo(transcriptPath) {
+  const state = loadAutoSaveState();
+  if (!transcriptPath || state.transcriptPath !== transcriptPath) {
+    return null;
+  }
+  if (state.lastSaveTimestamp === 0)
+    return null;
+  const elapsed = Date.now() - state.lastSaveTimestamp;
+  if (elapsed < 5e3)
+    return null;
+  const seconds = Math.floor(elapsed / 1e3);
+  if (seconds < 60)
+    return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60)
+    return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h`;
 }
 function resetAutoSaveState() {
   saveAutoSaveState({ ...DEFAULT_AUTO_SAVE_STATE });
@@ -4506,7 +4530,8 @@ var init_config = __esm({
       lastSaveFragments: 0,
       transcriptPath: null,
       isSaving: false,
-      saveStartTime: 0
+      saveStartTime: 0,
+      savingDisplayUntil: 0
     };
   }
 });
@@ -6859,11 +6884,14 @@ __export(database_exports, {
   insertMemory: () => insertMemory,
   insertTurn: () => insertTurn,
   isFts5Enabled: () => isFts5Enabled,
+  listProjects: () => listProjects,
+  renameProject: () => renameProject,
   saveDb: () => saveDb,
   searchByKeyword: () => searchByKeyword,
   searchByVector: () => searchByVector,
   storeManualMemory: () => storeManualMemory,
   updateMemory: () => updateMemory,
+  updateMemoryProjectId: () => updateMemoryProjectId,
   updateSessionProgress: () => updateSessionProgress,
   upsertSessionSummary: () => upsertSessionSummary,
   validateDatabase: () => validateDatabase
@@ -7271,6 +7299,20 @@ function updateMemory(db, id, newContent, newEmbedding) {
   );
   return db.getRowsModified() > 0;
 }
+function updateMemoryProjectId(db, id, newProjectId) {
+  db.run(
+    `UPDATE memories SET project_id = ? WHERE id = ?`,
+    [newProjectId, id]
+  );
+  return db.getRowsModified() > 0;
+}
+function renameProject(db, oldProjectId, newProjectId) {
+  db.run(
+    `UPDATE memories SET project_id = ? WHERE project_id = ?`,
+    [newProjectId, oldProjectId]
+  );
+  return db.getRowsModified();
+}
 function getRecentMemories(db, projectId, limit = 10) {
   let query = `SELECT id, content, project_id, timestamp FROM memories`;
   const params = [];
@@ -7430,6 +7472,21 @@ function getStats(db) {
     oldestTimestamp,
     newestTimestamp
   };
+}
+function listProjects(db) {
+  const result = db.exec(`
+    SELECT project_id, COUNT(*) as count
+    FROM memories
+    WHERE project_id IS NOT NULL
+    GROUP BY project_id
+    ORDER BY count DESC
+  `);
+  if (!result[0])
+    return [];
+  return result[0].values.map((row) => ({
+    projectId: row[0],
+    fragmentCount: row[1]
+  }));
 }
 function getProjectStats(db, projectId) {
   const fragmentResult = db.exec(
@@ -7909,6 +7966,17 @@ function formatDuration(date) {
     return `${diffDays}d ago`;
   return date.toLocaleDateString();
 }
+function formatCompactNumber(n) {
+  if (n < 1e3)
+    return String(n);
+  if (n < 1e6)
+    return `${(n / 1e3).toFixed(1)}K`;
+  if (n < 1e9)
+    return `${(n / 1e6).toFixed(1)}M`;
+  if (n < 1e12)
+    return `${(n / 1e9).toFixed(1)}B`;
+  return `${(n / 1e12).toFixed(1)}T`;
+}
 
 // src/index.ts
 init_config();
@@ -8048,6 +8116,54 @@ init_embeddings();
 init_config();
 import * as fs3 from "fs";
 import * as readline from "readline";
+
+// src/logger.ts
+var globalVerbose = false;
+var globalJsonOutput = false;
+var globalPrefix = "\x1B[38;2;217;119;87m\u03A8\x1B[0m";
+var LOG_LEVELS = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+function getMinLevel() {
+  return globalVerbose ? LOG_LEVELS.debug : LOG_LEVELS.warn;
+}
+function formatPlain(level, message, context) {
+  const levelTag = level.toUpperCase().padEnd(5);
+  let output = `${globalPrefix} ${levelTag} ${message}`;
+  if (context && Object.keys(context).length > 0) {
+    const contextStr = Object.entries(context).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(" ");
+    output += ` (${contextStr})`;
+  }
+  return output;
+}
+function formatJson(entry) {
+  return JSON.stringify(entry);
+}
+function log(level, message, context) {
+  if (LOG_LEVELS[level] < getMinLevel()) {
+    return;
+  }
+  const entry = {
+    level,
+    message,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    context
+  };
+  const output = globalJsonOutput ? formatJson(entry) : formatPlain(level, message, context);
+  if (level === "error" || level === "warn") {
+    console.error(output);
+  } else {
+    console.log(output);
+  }
+}
+function debug(message, context) {
+  log("debug", message, context);
+}
+
+// src/archive.ts
 var MIN_CONTENT_LENGTH = 75;
 var OPTIMAL_CHUNK_SIZE = 400;
 var MAX_CHUNK_SIZE = 600;
@@ -8175,8 +8291,6 @@ function extractTextContent(content, toolIdMap) {
       } else if (typeof item === "object" && item !== null) {
         if ("text" in item && typeof item.text === "string") {
           textParts.push(item.text);
-        } else if ("thinking" in item && typeof item.thinking === "string") {
-          textParts.push(`[Thinking] ${item.thinking}`);
         } else if (item.type === "tool_use") {
           if (item.id && item.name) {
             toolIdMap.set(item.id, item.name);
@@ -8435,7 +8549,7 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
     return result;
   }
   if (parseStats.parseErrors > 0 || parseStats.skippedLines > 0) {
-    console.log(`Debug Parse Stats: Total: ${parseStats.totalLines}, Parsed: ${parseStats.parsedLines}, Skipped: ${parseStats.skippedLines}, Errors: ${parseStats.parseErrors}`);
+    debug(`Parse Stats: Total: ${parseStats.totalLines}, Parsed: ${parseStats.parsedLines}, Skipped: ${parseStats.skippedLines}, Errors: ${parseStats.parseErrors}`);
   }
   const contentToArchive = [];
   for (const message of messages) {
@@ -8474,7 +8588,7 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
   }
   contentToArchive.sort((a, b) => b.value - a.value);
   const totalExtractedLength = contentToArchive.reduce((sum, c) => sum + c.content.length, 0);
-  console.log(`Debug: Extracted ${contentToArchive.length} chunks (${totalExtractedLength} chars) from ${messages.length} messages`);
+  debug(`Extracted ${contentToArchive.length} chunks (${totalExtractedLength} chars) from ${messages.length} messages`);
   if (contentToArchive.length === 0) {
     return result;
   }
@@ -8875,39 +8989,44 @@ async function handleStatusline() {
     const stats = getStats(db);
     const parts = [`${ANSI.brick}\u03A8${ANSI.reset}`];
     if (config.statusline.showFragments) {
-      parts.push(`${stats.fragmentCount}`);
+      parts.push(formatCompactNumber(stats.fragmentCount));
     }
     if (config.statusline.showContext) {
       const contextStrip = createContextStrip(contextPercent);
       parts.push(contextStrip);
     }
-    if (isSaving()) {
+    if (isShowingSavingIndicator()) {
       const frames = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
       const frame = frames[Math.floor(Date.now() / 80) % frames.length];
       parts.push(`${ANSI.yellow}${frame} Saving${ANSI.reset}`);
     } else if (wasRecentlySaved()) {
       parts.push(`${ANSI.green}\u2713 Autosaved${ANSI.reset}`);
-    } else if (stdin?.transcript_path && config.autosave.contextStep.enabled) {
-      if (shouldAutoSave(contextPercent, stdin.transcript_path)) {
-        setSavingState(true, stdin.transcript_path);
-        const scriptPath = process.argv[1];
-        const nodePath = process.argv[0];
-        const childArgs = ["background-save"];
-        if (stdin.transcript_path)
-          childArgs.push(`--transcript=${stdin.transcript_path}`);
-        if (stdin.cwd)
-          childArgs.push(`--cwd=${stdin.cwd}`);
-        childArgs.push(`--percent=${contextPercent}`);
-        try {
-          const subprocess = spawn(nodePath, [scriptPath, ...childArgs], {
-            detached: true,
-            stdio: "ignore",
-            env: process.env
-          });
-          subprocess.unref();
-          parts.push(`${ANSI.yellow}\u280B Saving${ANSI.reset}`);
-        } catch (e) {
-          setSavingState(false, null);
+    } else {
+      const timeAgo = getLastSaveTimeAgo(stdin?.transcript_path ?? null);
+      if (timeAgo) {
+        parts.push(`${ANSI.dim}\u2713 ${timeAgo}${ANSI.reset}`);
+      }
+      if (stdin?.transcript_path && config.autosave.contextStep.enabled) {
+        if (shouldAutoSave(contextPercent, stdin.transcript_path)) {
+          setSavingState(true, stdin.transcript_path);
+          const scriptPath = process.argv[1];
+          const nodePath = process.argv[0];
+          const childArgs = ["background-save"];
+          if (stdin.transcript_path)
+            childArgs.push(`--transcript=${stdin.transcript_path}`);
+          if (stdin.cwd)
+            childArgs.push(`--cwd=${stdin.cwd}`);
+          childArgs.push(`--percent=${contextPercent}`);
+          try {
+            const subprocess = spawn(nodePath, [scriptPath, ...childArgs], {
+              detached: true,
+              stdio: "ignore",
+              env: process.env
+            });
+            subprocess.unref();
+          } catch (e) {
+            setSavingState(false, null);
+          }
         }
       }
     }

@@ -184,6 +184,20 @@ export function recordSavePoint(contextPercent: number, fragmentsSaved: number):
 }
 
 /**
+ * Record a remember operation (granular memory save via MCP)
+ */
+export function recordRemember(count: number = 1): void {
+  const analytics = getAnalytics();
+
+  if (!analytics.currentSession) {
+    return;
+  }
+
+  analytics.currentSession.fragmentsCreated += count;
+  saveAnalytics(analytics);
+}
+
+/**
  * Record a context clear in the current session
  */
 export function recordClear(): void {

@@ -642,6 +642,38 @@ export function updateMemory(
 }
 
 /**
+ * Update memory project ID
+ */
+export function updateMemoryProjectId(
+  db: SqlJsDatabase,
+  id: number,
+  newProjectId: string | null
+): boolean {
+  db.run(
+    `UPDATE memories SET project_id = ? WHERE id = ?`,
+    [newProjectId, id]
+  );
+
+  return db.getRowsModified() > 0;
+}
+
+/**
+ * Bulk rename project - move all memories from one project to another
+ */
+export function renameProject(
+  db: SqlJsDatabase,
+  oldProjectId: string,
+  newProjectId: string
+): number {
+  db.run(
+    `UPDATE memories SET project_id = ? WHERE project_id = ?`,
+    [newProjectId, oldProjectId]
+  );
+
+  return db.getRowsModified();
+}
+
+/**
  * Get recent memories for a project, sorted by timestamp
  */
 export function getRecentMemories(
@@ -903,6 +935,26 @@ export function getStats(db: SqlJsDatabase): DbStats {
     oldestTimestamp,
     newestTimestamp,
   };
+}
+
+/**
+ * List all projects with their fragment counts
+ */
+export function listProjects(db: SqlJsDatabase): Array<{ projectId: string; fragmentCount: number }> {
+  const result = db.exec(`
+    SELECT project_id, COUNT(*) as count
+    FROM memories
+    WHERE project_id IS NOT NULL
+    GROUP BY project_id
+    ORDER BY count DESC
+  `);
+
+  if (!result[0]) return [];
+
+  return result[0].values.map((row) => ({
+    projectId: row[0] as string,
+    fragmentCount: row[1] as number,
+  }));
 }
 
 /**

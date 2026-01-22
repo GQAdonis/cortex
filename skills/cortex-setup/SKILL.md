@@ -7,85 +7,59 @@ user-invocable: true
 
 # Cortex Setup Wizard
 
-Initialize Cortex for first-time use. This wizard helps configure Cortex based on user preferences.
-
-## Prerequisites Check
-
-Before starting, verify:
-1. Node.js 18+ is installed
-2. The plugin directory exists
+Initialize Cortex for first-time use.
 
 ## Setup Steps
 
-### 1. Create Data Directory
+### 1. Initialize System
 
-Create `~/.cortex` directory if it doesn't exist.
-
-### 2. Initialize Database
-
-Run the Cortex setup command to initialize the database:
+Run the internal setup command to create directories and database:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/dist/index.js setup
 ```
 
-### 3. Configure Preferences
+### 2. Configure Preferences
 
-Ask the user about their preferences using AskUserQuestion:
+Ask the user to choose a configuration preset:
 
-**Question 1: Auto-save threshold**
-- When should Cortex auto-save context?
-- Options: 60% (eager), 70% (recommended), 80% (conservative)
+**Question:** How would you like Cortex to behave?
 
-**Question 2: Auto-clear**
-- Should Cortex automatically clear context after saving?
-- Options: Yes (auto-clear enabled), No (manual clear only)
+1. **Full Automation (Recommended)**
+   - **Protection**: Saves seamlessly while you work (every 5% context).
+   - **Clear Safety**: Automatically saves backup before you clear context.
+   - **Visuals**: Shows "Saved" notifications.
 
-**Question 3: Auto-clear threshold** (if auto-clear enabled)
-- At what context % should auto-clear trigger?
-- Options: 75%, 80% (recommended), 85%
+2. **Balanced**
+   - **Protection**: Saves less frequently (every 10%).
+   - **Clear Safety**: Automatically saves backup before clear.
+   - **Visuals**: Standard status bar.
 
-### 4. Apply Configuration
+3. **Silent Mode**
+   - **Protection**: **Manual saving only**.
+   - **Clear Safety**: Automatically saves backup before clear.
+   - **Visuals**: Hidden status bar.
 
-Based on user responses, update `~/.cortex/config.json`:
+### 3. Apply Preset
 
-```json
-{
-  "automation": {
-    "autoSaveThreshold": <selected>,
-    "autoClearEnabled": <selected>,
-    "autoClearThreshold": <selected>
-  },
-  "setup": {
-    "completed": true,
-    "completedAt": "<timestamp>"
-  }
-}
+Based on the user's choice (1, 2, or 3), apply the corresponding preset:
+
+**If "1" or "Full":**
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/dist/index.js configure full
 ```
 
-### 5. Configure StatusLine (Optional)
-
-Ask if user wants to enable the status line, then update `~/.claude/settings.json` to add:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "node /path/to/cortex/dist/index.js statusline"
-  }
-}
+**If "2" or "Balanced":**
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/dist/index.js configure essential
 ```
 
-### 6. Complete Setup
+**If "3" or "Silent":**
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/dist/index.js configure minimal
+```
 
-Confirm setup is complete and show next steps:
+### 4. Finish
 
-- Use `/cortex-save` to archive context
-- Use recall tool for past context
-- Use `/cortex-configure` to adjust settings later
-
-## Important Notes
-
-- This wizard should only run once (first time setup)
-- After setup, use `/cortex-configure` for adjustments
-- All data is stored locally in `~/.cortex`
+Print the success message:
+"✅ Cortex is ready! Restart Claude Code for the statusline to appear."

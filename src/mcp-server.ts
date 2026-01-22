@@ -4,13 +4,13 @@
  */
 
 import * as readline from 'readline';
-import { initDb, getStats, getProjectStats, getMemory, deleteMemory, storeManualMemory, saveDb, searchByVector, searchByKeyword } from './database.js';
+import { initDb, getStats, getProjectStats, getMemory, deleteMemory, storeManualMemory, saveDb, searchByVector, searchByKeyword, updateMemory, updateMemoryProjectId, renameProject, listProjects } from './database.js';
 import { loadConfig, getDataDir, getCurrentSession, getMostRecentSession } from './config.js';
 import { hybridSearch } from './search.js';
 import { archiveSession } from './archive.js';
 import { embedQuery } from './embeddings.js';
 import { getProjectId } from './stdin.js';
-import { getAnalytics, getAnalyticsSummary } from './analytics.js';
+import { getAnalytics, getAnalyticsSummary, recordRemember, recordRecall } from './analytics.js';
 import type { Database as SqlJsDatabase } from 'sql.js';
 
 // ============================================================================
@@ -195,6 +195,46 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'cortex_update',
+    description: 'Update a memory fragment. Can update content and/or move to different project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        memoryId: {
+          type: 'number',
+          description: 'The ID of the memory to update',
+        },
+        content: {
+          type: 'string',
+          description: 'New content for the memory (will re-generate embedding)',
+        },
+        projectId: {
+          type: 'string',
+          description: 'New project ID to move the memory to',
+        },
+      },
+      required: ['memoryId'],
+    },
+  },
+  {
+    name: 'cortex_rename_project',
+    description: 'Rename a project - moves all memories from old project ID to new project ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        oldProjectId: {
+          type: 'string',
+          description: 'The current project ID',
+        },
+        newProjectId: {
+          type: 'string',
+          description: 'The new project ID',
+        },
+      },
+      required: ['oldProjectId', 'newProjectId'],
+    },
+  },
+  {
     name: 'cortex_forget_project',
     description: 'Delete all memories for a specific project. Requires confirmation.',
     inputSchema: {
@@ -244,6 +284,9 @@ async function handleRecall(
     limit,
   });
 
+  // Track in analytics
+  recordRecall();
+
   return {
     results: results.map((r) => ({
       id: r.id,
@@ -289,6 +332,9 @@ async function handleRemember(
 
   // Persist to disk
   saveDb(db);
+
+  // Track in analytics
+  recordRemember();
 
   return {
     success: true,
@@ -352,6 +398,7 @@ async function handleStats(
   params: { projectId?: string }
 ): Promise<unknown> {
   const stats = getStats(db);
+  const projects = listProjects(db);
 
   const result: Record<string, unknown> = {
     totalFragments: stats.fragmentCount,
@@ -361,6 +408,7 @@ async function handleStats(
     oldestMemory: stats.oldestTimestamp?.toISOString() || null,
     newestMemory: stats.newestTimestamp?.toISOString() || null,
     dataDir: getDataDir(),
+    projects: projects,
   };
 
   if (params.projectId) {
@@ -454,6 +502,103 @@ async function handleDelete(
     success: deleted,
     memoryId,
     message: deleted ? 'Memory deleted successfully.' : 'Failed to delete memory.',
+  };
+}
+
+async function handleUpdate(
+  db: SqlJsDatabase,
+  params: { memoryId: number; content?: string; projectId?: string }
+): Promise<unknown> {
+  const { memoryId, content, projectId } = params;
+
+  // Get the memory first
+  const memory = getMemory(db, memoryId);
+
+  if (!memory) {
+    return {
+      error: 'Memory not found',
+      memoryId,
+    };
+  }
+
+  if (!content && projectId === undefined) {
+    return {
+      error: 'Nothing to update. Provide content and/or projectId.',
+      memoryId,
+    };
+  }
+
+  const updates: string[] = [];
+
+  // Update content if provided
+  if (content && content.trim().length > 0) {
+    const embedding = await embedQuery(content);
+    const updated = updateMemory(db, memoryId, content, embedding);
+    if (updated) {
+      updates.push('content');
+    }
+  }
+
+  // Update project if provided
+  if (projectId !== undefined) {
+    const updated = updateMemoryProjectId(db, memoryId, projectId || null);
+    if (updated) {
+      updates.push('projectId');
+    }
+  }
+
+  if (updates.length > 0) {
+    saveDb(db);
+  }
+
+  return {
+    success: updates.length > 0,
+    memoryId,
+    updated: updates,
+    message: updates.length > 0
+      ? `Updated ${updates.join(' and ')} for memory ${memoryId}.`
+      : 'No changes made.',
+  };
+}
+
+async function handleRenameProject(
+  db: SqlJsDatabase,
+  params: { oldProjectId: string; newProjectId: string }
+): Promise<unknown> {
+  const { oldProjectId, newProjectId } = params;
+
+  if (!oldProjectId || !newProjectId) {
+    return {
+      error: 'Both oldProjectId and newProjectId are required.',
+    };
+  }
+
+  if (oldProjectId === newProjectId) {
+    return {
+      error: 'Old and new project IDs are the same.',
+    };
+  }
+
+  // Check if old project has memories
+  const projectStats = getProjectStats(db, oldProjectId);
+  if (projectStats.fragmentCount === 0) {
+    return {
+      error: 'No memories found for this project',
+      projectId: oldProjectId,
+    };
+  }
+
+  const count = renameProject(db, oldProjectId, newProjectId);
+  if (count > 0) {
+    saveDb(db);
+  }
+
+  return {
+    success: count > 0,
+    oldProjectId,
+    newProjectId,
+    memoriesMoved: count,
+    message: `Moved ${count} memories from "${oldProjectId}" to "${newProjectId}".`,
   };
 }
 
@@ -675,6 +820,14 @@ class MCPServer {
 
       case 'cortex_delete':
         result = await handleDelete(this.db, args as Parameters<typeof handleDelete>[1]);
+        break;
+
+      case 'cortex_update':
+        result = await handleUpdate(this.db, args as Parameters<typeof handleUpdate>[1]);
+        break;
+
+      case 'cortex_rename_project':
+        result = await handleRenameProject(this.db, args as Parameters<typeof handleRenameProject>[1]);
         break;
 
       case 'cortex_forget_project':

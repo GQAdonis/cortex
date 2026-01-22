@@ -109,9 +109,6 @@ cortex/
 ├── skills/
 │   ├── cortex-setup/SKILL.md     # Setup wizard (/cortex-setup)
 │   ├── cortex-configure/SKILL.md # Configuration (/cortex-configure)
-│   ├── cortex-stats/SKILL.md     # Statistics display (/cortex-stats)
-│   ├── cortex-recall/SKILL.md    # Memory search (/cortex-recall)
-│   ├── cortex-save/SKILL.md      # Save context (/cortex-save)
 │   └── cortex-manage/SKILL.md    # Memory management (/cortex-manage)
 ├── hooks/
 │   └── hooks.json       # SessionStart, PostToolUse, PreCompact
@@ -135,6 +132,8 @@ The MCP server exposes these tools:
 | `cortex_archive` | Archive session (canonical name) | Safe |
 | `cortex_stats` | Get statistics | Read-only |
 | `cortex_restore` | Get restoration context | Read-only |
+| `cortex_update` | Update memory content or project | Safe |
+| `cortex_rename_project` | Bulk move memories to new project | Safe |
 | `cortex_delete` | Delete memory fragment | **Requires confirmation** |
 | `cortex_forget_project` | Delete project memories | **Requires confirmation** |
 | `cortex_analytics` | Get usage analytics | Read-only |
@@ -146,13 +145,12 @@ The MCP server exposes these tools:
 
 ## Skills (User-Invocable Commands)
 
+Skills are for multi-step workflows. Atomic operations (stats, recall, save) use MCP tools directly.
+
 | Skill | Command | Purpose |
 |-------|---------|---------|
 | cortex-setup | `/cortex-setup` | First-time initialization |
 | cortex-configure | `/cortex-configure` | Adjust settings |
-| cortex-stats | `/cortex-stats` | View memory statistics |
-| cortex-save | `/cortex-save` | Archive session context |
-| cortex-recall | `/cortex-recall` | Search memories |
 | cortex-manage | `/cortex-manage` | Delete/manage memories |
 
 ## Hooks

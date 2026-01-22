@@ -1,7 +1,7 @@
 ---
 name: cortex-manage
-description: Manage memories - search, view, delete, update fragments
-allowed-tools: mcp__cortex-memory__cortex_recall, mcp__cortex-memory__cortex_delete, mcp__cortex-memory__cortex_forget_project, AskUserQuestion
+description: Manage memories - search, view, update, delete, rename projects
+allowed-tools: mcp__cortex-memory__cortex_recall, mcp__cortex-memory__cortex_update, mcp__cortex-memory__cortex_rename_project, mcp__cortex-memory__cortex_delete, mcp__cortex-memory__cortex_forget_project, AskUserQuestion
 user-invocable: true
 ---
 
@@ -17,6 +17,28 @@ Use `cortex_recall` to find specific memories:
 - Search by content
 - Filter by project
 - View memory details
+
+### Update Memory
+
+Use `cortex_update` to edit a memory:
+- Update content (will re-generate embedding)
+- Move to different project
+- Both at once
+
+```
+cortex_update(memoryId: 123, content: "corrected content")
+cortex_update(memoryId: 123, projectId: "new-project")
+```
+
+### Rename Project
+
+Use `cortex_rename_project` to move all memories from one project to another:
+- Useful when project directory is renamed
+- Bulk operation - moves all memories at once
+
+```
+cortex_rename_project(oldProjectId: "old-name", newProjectId: "new-name")
+```
 
 ### Delete Specific Memory
 
@@ -45,6 +67,36 @@ Use `cortex_forget_project` to delete all memories for a project:
 5. **Be Clear**: State what will be permanently lost
 
 ## Example Flows
+
+### Updating a Memory
+
+User: "Fix the typo in memory 42"
+
+1. First recall to see the memory:
+   ```
+   cortex_recall(query: "...")
+   ```
+
+2. Update with corrected content:
+   ```
+   cortex_update(memoryId: 42, content: "corrected content here")
+   ```
+
+### Moving Memory to Different Project
+
+User: "Move memory 42 to project 'cortex'"
+
+```
+cortex_update(memoryId: 42, projectId: "cortex")
+```
+
+### Renaming a Project
+
+User: "I renamed my project folder from 'old-name' to 'new-name'"
+
+```
+cortex_rename_project(oldProjectId: "old-name", newProjectId: "new-name")
+```
 
 ### Deleting a Specific Memory
 

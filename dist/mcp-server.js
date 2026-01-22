@@ -7041,6 +7041,28 @@ function storeManualMemory(db, content, embedding, projectId, context) {
     timestamp: /* @__PURE__ */ new Date()
   });
 }
+function updateMemory(db, id, newContent, newEmbedding) {
+  const newHash = hashContent(newContent);
+  db.run(
+    `UPDATE memories SET content = ?, content_hash = ?, embedding = ? WHERE id = ?`,
+    [newContent, newHash, embeddingToBuffer(newEmbedding), id]
+  );
+  return db.getRowsModified() > 0;
+}
+function updateMemoryProjectId(db, id, newProjectId) {
+  db.run(
+    `UPDATE memories SET project_id = ? WHERE id = ?`,
+    [newProjectId, id]
+  );
+  return db.getRowsModified() > 0;
+}
+function renameProject(db, oldProjectId, newProjectId) {
+  db.run(
+    `UPDATE memories SET project_id = ? WHERE project_id = ?`,
+    [newProjectId, oldProjectId]
+  );
+  return db.getRowsModified();
+}
 function searchByVector(db, queryEmbedding, projectId, limit = 10) {
   let query = `SELECT id, content, embedding, project_id, timestamp FROM memories`;
   const params = [];
@@ -7176,6 +7198,21 @@ function getStats(db) {
     oldestTimestamp,
     newestTimestamp
   };
+}
+function listProjects(db) {
+  const result = db.exec(`
+    SELECT project_id, COUNT(*) as count
+    FROM memories
+    WHERE project_id IS NOT NULL
+    GROUP BY project_id
+    ORDER BY count DESC
+  `);
+  if (!result[0])
+    return [];
+  return result[0].values.map((row) => ({
+    projectId: row[0],
+    fragmentCount: row[1]
+  }));
 }
 function getProjectStats(db, projectId) {
   const fragmentResult = db.exec(
@@ -7525,6 +7562,54 @@ init_embeddings();
 init_config();
 import * as fs3 from "fs";
 import * as readline from "readline";
+
+// src/logger.ts
+var globalVerbose = false;
+var globalJsonOutput = false;
+var globalPrefix = "\x1B[38;2;217;119;87m\u03A8\x1B[0m";
+var LOG_LEVELS = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+function getMinLevel() {
+  return globalVerbose ? LOG_LEVELS.debug : LOG_LEVELS.warn;
+}
+function formatPlain(level, message, context) {
+  const levelTag = level.toUpperCase().padEnd(5);
+  let output = `${globalPrefix} ${levelTag} ${message}`;
+  if (context && Object.keys(context).length > 0) {
+    const contextStr = Object.entries(context).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(" ");
+    output += ` (${contextStr})`;
+  }
+  return output;
+}
+function formatJson(entry) {
+  return JSON.stringify(entry);
+}
+function log(level, message, context) {
+  if (LOG_LEVELS[level] < getMinLevel()) {
+    return;
+  }
+  const entry = {
+    level,
+    message,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    context
+  };
+  const output = globalJsonOutput ? formatJson(entry) : formatPlain(level, message, context);
+  if (level === "error" || level === "warn") {
+    console.error(output);
+  } else {
+    console.log(output);
+  }
+}
+function debug(message, context) {
+  log("debug", message, context);
+}
+
+// src/archive.ts
 var MIN_CONTENT_LENGTH = 75;
 var OPTIMAL_CHUNK_SIZE = 400;
 var MAX_CHUNK_SIZE = 600;
@@ -7652,8 +7737,6 @@ function extractTextContent(content, toolIdMap) {
       } else if (typeof item === "object" && item !== null) {
         if ("text" in item && typeof item.text === "string") {
           textParts.push(item.text);
-        } else if ("thinking" in item && typeof item.thinking === "string") {
-          textParts.push(`[Thinking] ${item.thinking}`);
         } else if (item.type === "tool_use") {
           if (item.id && item.name) {
             toolIdMap.set(item.id, item.name);
@@ -7912,7 +7995,7 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
     return result;
   }
   if (parseStats.parseErrors > 0 || parseStats.skippedLines > 0) {
-    console.log(`Debug Parse Stats: Total: ${parseStats.totalLines}, Parsed: ${parseStats.parsedLines}, Skipped: ${parseStats.skippedLines}, Errors: ${parseStats.parseErrors}`);
+    debug(`Parse Stats: Total: ${parseStats.totalLines}, Parsed: ${parseStats.parsedLines}, Skipped: ${parseStats.skippedLines}, Errors: ${parseStats.parseErrors}`);
   }
   const contentToArchive = [];
   for (const message of messages) {
@@ -7951,7 +8034,7 @@ async function archiveSession(db, transcriptPath, projectId, options = {}) {
   }
   contentToArchive.sort((a, b) => b.value - a.value);
   const totalExtractedLength = contentToArchive.reduce((sum, c) => sum + c.content.length, 0);
-  console.log(`Debug: Extracted ${contentToArchive.length} chunks (${totalExtractedLength} chars) from ${messages.length} messages`);
+  debug(`Extracted ${contentToArchive.length} chunks (${totalExtractedLength} chars) from ${messages.length} messages`);
   if (contentToArchive.length === 0) {
     return result;
   }
@@ -8007,6 +8090,7 @@ init_embeddings();
 init_config();
 import * as fs4 from "fs";
 var ANALYTICS_VERSION = 1;
+var MAX_SESSIONS_TO_KEEP = 100;
 function getAnalytics() {
   const analyticsPath = getAnalyticsPath();
   if (!fs4.existsSync(analyticsPath)) {
@@ -8023,6 +8107,14 @@ function getAnalytics() {
     return createEmptyAnalytics();
   }
 }
+function saveAnalytics(data) {
+  ensureDataDir();
+  const analyticsPath = getAnalyticsPath();
+  if (data.sessions.length > MAX_SESSIONS_TO_KEEP) {
+    data.sessions = data.sessions.slice(-MAX_SESSIONS_TO_KEEP);
+  }
+  fs4.writeFileSync(analyticsPath, JSON.stringify(data, null, 2), "utf8");
+}
 function createEmptyAnalytics() {
   return {
     version: ANALYTICS_VERSION,
@@ -8032,6 +8124,22 @@ function createEmptyAnalytics() {
 }
 function migrateAnalytics(oldData) {
   return createEmptyAnalytics();
+}
+function recordRemember(count = 1) {
+  const analytics = getAnalytics();
+  if (!analytics.currentSession) {
+    return;
+  }
+  analytics.currentSession.fragmentsCreated += count;
+  saveAnalytics(analytics);
+}
+function recordRecall() {
+  const analytics = getAnalytics();
+  if (!analytics.currentSession) {
+    return;
+  }
+  analytics.currentSession.recallCount++;
+  saveAnalytics(analytics);
 }
 function getAnalyticsSummary() {
   const analytics = getAnalytics();
@@ -8196,6 +8304,46 @@ var TOOLS = [
     }
   },
   {
+    name: "cortex_update",
+    description: "Update a memory fragment. Can update content and/or move to different project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memoryId: {
+          type: "number",
+          description: "The ID of the memory to update"
+        },
+        content: {
+          type: "string",
+          description: "New content for the memory (will re-generate embedding)"
+        },
+        projectId: {
+          type: "string",
+          description: "New project ID to move the memory to"
+        }
+      },
+      required: ["memoryId"]
+    }
+  },
+  {
+    name: "cortex_rename_project",
+    description: "Rename a project - moves all memories from old project ID to new project ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        oldProjectId: {
+          type: "string",
+          description: "The current project ID"
+        },
+        newProjectId: {
+          type: "string",
+          description: "The new project ID"
+        }
+      },
+      required: ["oldProjectId", "newProjectId"]
+    }
+  },
+  {
     name: "cortex_forget_project",
     description: "Delete all memories for a specific project. Requires confirmation.",
     inputSchema: {
@@ -8235,6 +8383,7 @@ async function handleRecall(db, params) {
     includeAllProjects,
     limit
   });
+  recordRecall();
   return {
     results: results.map((r) => ({
       id: r.id,
@@ -8268,6 +8417,7 @@ async function handleRemember(db, params) {
     };
   }
   saveDb(db);
+  recordRemember();
   return {
     success: true,
     id: result.id,
@@ -8312,6 +8462,7 @@ async function handleSave(db, params) {
 }
 async function handleStats(db, params) {
   const stats = getStats(db);
+  const projects = listProjects(db);
   const result = {
     totalFragments: stats.fragmentCount,
     totalProjects: stats.projectCount,
@@ -8319,7 +8470,8 @@ async function handleStats(db, params) {
     dbSizeBytes: stats.dbSizeBytes,
     oldestMemory: stats.oldestTimestamp?.toISOString() || null,
     newestMemory: stats.newestTimestamp?.toISOString() || null,
-    dataDir: getDataDir()
+    dataDir: getDataDir(),
+    projects
   };
   if (params.projectId) {
     const projectStats = getProjectStats(db, params.projectId);
@@ -8387,6 +8539,76 @@ async function handleDelete(db, params) {
     success: deleted,
     memoryId,
     message: deleted ? "Memory deleted successfully." : "Failed to delete memory."
+  };
+}
+async function handleUpdate(db, params) {
+  const { memoryId, content, projectId } = params;
+  const memory = getMemory(db, memoryId);
+  if (!memory) {
+    return {
+      error: "Memory not found",
+      memoryId
+    };
+  }
+  if (!content && projectId === void 0) {
+    return {
+      error: "Nothing to update. Provide content and/or projectId.",
+      memoryId
+    };
+  }
+  const updates = [];
+  if (content && content.trim().length > 0) {
+    const embedding = await embedQuery(content);
+    const updated = updateMemory(db, memoryId, content, embedding);
+    if (updated) {
+      updates.push("content");
+    }
+  }
+  if (projectId !== void 0) {
+    const updated = updateMemoryProjectId(db, memoryId, projectId || null);
+    if (updated) {
+      updates.push("projectId");
+    }
+  }
+  if (updates.length > 0) {
+    saveDb(db);
+  }
+  return {
+    success: updates.length > 0,
+    memoryId,
+    updated: updates,
+    message: updates.length > 0 ? `Updated ${updates.join(" and ")} for memory ${memoryId}.` : "No changes made."
+  };
+}
+async function handleRenameProject(db, params) {
+  const { oldProjectId, newProjectId } = params;
+  if (!oldProjectId || !newProjectId) {
+    return {
+      error: "Both oldProjectId and newProjectId are required."
+    };
+  }
+  if (oldProjectId === newProjectId) {
+    return {
+      error: "Old and new project IDs are the same."
+    };
+  }
+  const projectStats = getProjectStats(db, oldProjectId);
+  if (projectStats.fragmentCount === 0) {
+    return {
+      error: "No memories found for this project",
+      projectId: oldProjectId
+    };
+  }
+  const count = renameProject(db, oldProjectId, newProjectId);
+  if (count > 0) {
+    saveDb(db);
+  }
+  return {
+    success: count > 0,
+    oldProjectId,
+    newProjectId,
+    memoriesMoved: count,
+    message: `Moved ${count} memories from "${oldProjectId}" to "${newProjectId}".`
   };
 }
 async function handleForgetProject(db, params) {
@@ -8559,6 +8781,12 @@ var MCPServer = class {
         break;
       case "cortex_delete":
         result = await handleDelete(this.db, args);
+        break;
+      case "cortex_update":
+        result = await handleUpdate(this.db, args);
+        break;
+      case "cortex_rename_project":
+        result = await handleRenameProject(this.db, args);
         break;
       case "cortex_forget_project":
         result = await handleForgetProject(this.db, args);

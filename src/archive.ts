@@ -10,6 +10,7 @@ import type { Database as SqlJsDatabase } from 'sql.js';
 import { insertMemory, contentExists, saveDb, insertTurn, getRecentTurns, upsertSessionSummary, getSessionProgress, updateSessionProgress, clearOldTurns } from './database.js';
 import { embedBatch } from './embeddings.js';
 import { loadConfig } from './config.js';
+import { debug } from './logger.js';
 import type { ArchiveResult, TranscriptMessage, ParseResult } from './types.js';
 
 // ============================================================================
@@ -185,9 +186,6 @@ function extractTextContent(content: unknown, toolIdMap: Map<string, string>): s
       } else if (typeof item === 'object' && item !== null) {
         if ('text' in item && typeof item.text === 'string') {
           textParts.push(item.text);
-        } else if ('thinking' in item && typeof item.thinking === 'string') {
-          // Include thinking blocks as they contain valuable context/reasoning
-          textParts.push(`[Thinking] ${item.thinking}`);
         } else if (item.type === 'tool_use') {
           // Track tool ID
           if (item.id && item.name) {
@@ -604,8 +602,9 @@ export async function archiveSession(
 
   // Log parse stats if there were errors
   if (parseStats.parseErrors > 0 || parseStats.skippedLines > 0) {
-    console.log(`Debug Parse Stats: Total: ${parseStats.totalLines}, Parsed: ${parseStats.parsedLines}, Skipped: ${parseStats.skippedLines}, Errors: ${parseStats.parseErrors}`);
+    debug(`Parse Stats: Total: ${parseStats.totalLines}, Parsed: ${parseStats.parsedLines}, Skipped: ${parseStats.skippedLines}, Errors: ${parseStats.parseErrors}`);
   }
+
 
   // Extract and filter content from BOTH user and assistant messages
   // User messages provide context; assistant messages provide answers
@@ -666,7 +665,8 @@ export async function archiveSession(
   contentToArchive.sort((a, b) => b.value - a.value);
 
   const totalExtractedLength = contentToArchive.reduce((sum, c) => sum + c.content.length, 0);
-  console.log(`Debug: Extracted ${contentToArchive.length} chunks (${totalExtractedLength} chars) from ${messages.length} messages`);
+  debug(`Extracted ${contentToArchive.length} chunks (${totalExtractedLength} chars) from ${messages.length} messages`);
+
 
   if (contentToArchive.length === 0) {
     return result;
