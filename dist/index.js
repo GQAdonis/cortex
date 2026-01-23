@@ -4233,8 +4233,9 @@ function saveConfig(config) {
   atomicWriteFileSync(configPath, JSON.stringify(config, null, 2));
 }
 function applyPreset(preset) {
+  const currentConfig = loadConfig();
   const presetConfig = CONFIG_PRESETS[preset];
-  const config = deepMerge(DEFAULT_CONFIG, presetConfig);
+  const config = deepMerge(currentConfig, presetConfig);
   saveConfig(config);
   return config;
 }
@@ -9368,7 +9369,7 @@ async function handleSetup() {
   console.log("");
   console.log(`${ANSI.brick}\u03A8${ANSI.reset} Setup complete!`);
   console.log("");
-  console.log(`${ANSI.yellow}Important: Restart Claude Code to activate the statusline${ANSI.reset}`);
+  console.log(`${ANSI.yellow}Now restart Claude Code to enable memory tools${ANSI.reset}`);
   console.log("");
   console.log("Commands available:");
   console.log("  /cortex:save     - Archive session context");

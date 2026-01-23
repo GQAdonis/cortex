@@ -348,9 +348,7 @@ export const CONFIG_PRESETS: Record<ConfigPreset, Partial<Config>> = {
 export function applyPreset(preset: ConfigPreset): Config {
   const currentConfig = loadConfig();
   const presetConfig = CONFIG_PRESETS[preset];
-  const config = deepMerge(DEFAULT_CONFIG, presetConfig);
-  // Preserve setup state - presets should never reset completed status
-  config.setup = currentConfig.setup;
+  const config = deepMerge(currentConfig, presetConfig);
   saveConfig(config);
   return config;
 }
