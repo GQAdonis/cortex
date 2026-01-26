@@ -77,6 +77,28 @@ Please run /cortex-configure
 
 Done! Restart Claude Code to activate the statusline.
 
+## 🔄 Updating
+
+To update Cortex to the latest version:
+
+**Step 1: Update the marketplace**
+```
+/plugin marketplace update hjertefolger/cortex
+```
+
+**Step 2: Update the plugin**
+```
+/plugin update cortex
+```
+
+**Step 3: Restart Claude Code** to load the new version.
+
+Your memories in `~/.cortex/` are preserved during updates.
+
+> **Note:** Due to a [known Claude Code issue](https://github.com/anthropics/claude-code/issues/14061),
+> always update the marketplace first. After restart, you can ask Claude to verify
+> the update by checking if the cached plugin matches the latest release.
+
 ## Statusline
 
 The statusline is configured automatically by `/cortex-setup`. Restart Claude Code after setup to see it.
