@@ -63,7 +63,7 @@ Then run the install command below in that session.
 
 Ask Claude to run the setup skill:
 ```
-Please run /cortex-setup
+Please setup Cortex
 ```
 
 The wizard will initialize the database, download the embedding model, and configure the statusline.
@@ -91,9 +91,16 @@ To update Cortex to the latest version:
 /plugin update cortex
 ```
 
-**Step 3: Restart Claude Code** to load the new version.
+**Step 3: Run the setup wizard**
 
-Your memories in `~/.cortex/` are preserved during updates.
+Ask Claude to run the setup skill:
+```
+Please setup Cortex
+```
+
+The wizard will install dependencies and download the embedding model for the new version. Your memories and configuration in `~/.cortex/` are preserved.
+
+**Step 4: Restart Claude Code** to load the new version.
 
 > **Note:** Due to a [known Claude Code issue](https://github.com/anthropics/claude-code/issues/14061),
 > always update the marketplace first. After restart, you can ask Claude to verify
