@@ -63,7 +63,7 @@ Then run the install command below in that session.
 
 Ask Claude to run the setup skill:
 ```
-Please setup Cortex
+Please setup Cortex (or run /cortex-setup manually)
 ```
 
 The wizard will initialize the database, download the embedding model, and configure the statusline.
@@ -72,7 +72,7 @@ The wizard will initialize the database, download the embedding model, and confi
 
 Ask Claude to configure your preferences:
 ```
-Please run /cortex-configure
+Please configure Cortex (or run /cortex-configure manually)
 ```
 
 Done! Restart Claude Code to activate the statusline.
@@ -95,7 +95,7 @@ To update Cortex to the latest version:
 
 Ask Claude to run the setup skill:
 ```
-Please setup Cortex
+Please setup Cortex (or run /cortex-setup manually)
 ```
 
 The wizard will install dependencies and download the embedding model for the new version. Your memories and configuration in `~/.cortex/` are preserved.
